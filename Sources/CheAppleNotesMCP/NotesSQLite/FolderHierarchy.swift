@@ -48,4 +48,22 @@ struct FolderHierarchy {
             .sorted { ($0.sortOrder ?? 0, $0.title) < ($1.sortOrder ?? 0, $1.title) }
             .map { expand($0) }
     }
+
+    /// Slash-joined titles from root to `folder` (e.g. "Coparenting/Jaime/2024"),
+    /// walking ZPARENT through `byPK`. Presentation only, never identity (see
+    /// CONTEXT.md). Account-scoped by construction: parent chains never cross
+    /// accounts. Cycle-safe: stops when a pk repeats. A missing parent row
+    /// truncates the walk there, so the folder behaves as a root.
+    static func path(of folder: Folder, byPK: [Int64: Folder]) -> String {
+        var titles = [folder.title]
+        var visited: Set<Int64> = [folder.pk]
+        var current = folder
+        while let parentPK = current.parentPK,
+              let parent = byPK[parentPK],
+              visited.insert(parentPK).inserted {
+            titles.append(parent.title)
+            current = parent
+        }
+        return titles.reversed().joined(separator: "/")
+    }
 }

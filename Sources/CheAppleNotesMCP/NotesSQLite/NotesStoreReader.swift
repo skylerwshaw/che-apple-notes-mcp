@@ -10,6 +10,11 @@ final class NotesStoreReader {
     private let path: String
     private var entityIDs: [String: Int32] = [:]
 
+    /// Persistent store UUID from Z_METADATA — the host of every
+    /// `x-coredata://` canonical ID this store's objects carry. nil only on a
+    /// malformed store; canonical IDs then degrade to the raw ZIDENTIFIER.
+    private(set) var storeUUID: String?
+
     init(at url: URL = Capabilities.noteStoreURL) throws {
         self.path = url.path
 
@@ -24,6 +29,7 @@ final class NotesStoreReader {
 
         // Populate entity ID cache from Z_PRIMARYKEY.
         try loadEntityIDs()
+        loadStoreUUID()
     }
 
     deinit {
@@ -48,6 +54,17 @@ final class NotesStoreReader {
                 let name = String(cString: namePtr)
                 entityIDs[name] = ent
             }
+        }
+    }
+
+    private func loadStoreUUID() {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, SQLQueries.storeUUIDQuery, -1, &stmt, nil) == SQLITE_OK else {
+            return
+        }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            storeUUID = columnText(stmt, 0)
         }
     }
 
@@ -132,6 +149,7 @@ final class NotesStoreReader {
                 title: columnText(stmt, 2) ?? "(untitled)",
                 accountPK: columnInt64Optional(stmt, 3),
                 accountName: columnText(stmt, 7),
+                storeUUID: storeUUID,
                 parentPK: columnInt64Optional(stmt, 4),
                 isHiddenContainer: sqlite3_column_int(stmt, 5) != 0,
                 sortOrder: columnIntOptional(stmt, 6),

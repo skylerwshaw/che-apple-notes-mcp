@@ -17,6 +17,7 @@ struct Folder {
     let title: String       // ZTITLE2 or ZTITLE
     let accountPK: Int64?   // ZACCOUNT4 or similar FK
     let accountName: String?
+    let storeUUID: String?  // Z_METADATA.Z_UUID, host of the canonical URI
     let parentPK: Int64?    // ZPARENT FK for nested folders
     let isHiddenContainer: Bool
     let sortOrder: Int?
@@ -25,6 +26,19 @@ struct Folder {
     /// (ZZONEOWNERNAME present). AppleScript `shared of folder` is preferred
     /// when available; SQLite heuristic is a fallback.
     let shared: Bool
+
+    /// Construct the canonical ID (ADR 0001): the Core Data URI form that
+    /// Notes.app's AppleScript dictionary consumes as `folder id "..."`.
+    /// The URI host is the persistent store UUID (Z_METADATA.Z_UUID), NOT the
+    /// account UUID; Notes rejects URIs built with the account UUID. Verified
+    /// against real AppleScript-returned ids. SQLite ZIDENTIFIER stores just
+    /// the folder UUID, which write tools cannot consume.
+    var appleScriptID: String {
+        guard let store = storeUUID, !store.isEmpty else {
+            return identifier  // fallback, write ops may fail
+        }
+        return "x-coredata://\(store)/ICFolder/p\(pk)"
+    }
 }
 
 struct Note {

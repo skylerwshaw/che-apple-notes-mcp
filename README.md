@@ -118,7 +118,7 @@ Useful for launchd jobs, shell scripts, CI pipelines, and agents that prefer sub
 
 | Tool | Description |
 |------|-------------|
-| `list_folders` | List all folders across all accounts (iCloud / On My Mac). Supports `shared: bool?` filter (v0.2.0). |
+| `list_folders` | List all folders across all accounts (iCloud / On My Mac). Rows carry canonical `id` (`x-coredata://…`, valid for `update_folder`/`delete_folder`), `uuid`, `parent_id`, and `path`. Supports `shared: bool?` filter (v0.2.0). |
 | `create_folder` | Create a new folder in an account |
 | `update_folder` | Rename a folder |
 | `delete_folder` | Delete an empty folder |
@@ -214,7 +214,7 @@ Output returns **both** `body_text` and `body_html` for reads with `include_body
 | **Full Disk Access** (recommended) | SQLite fast reads | Manual — System Settings → Privacy & Security → Full Disk Access |
 
 Without Full Disk Access:
-- `list_folders`, `list_notes`, `get_note` fall back to AppleScript (same result, 50–500× slower)
+- `list_folders`, `list_notes`, `get_note` fall back to AppleScript (same result, 50–500× slower; `list_folders` rows keep the canonical `id` but omit `uuid` / `parent_id` / `path`)
 - `list_notes_quick`, `search_notes`, `get_share_metadata` error out (they require SQLite)
 - `list_folders` / `list_notes` / `search_notes` with `shared: true|false` throw `featureRequiresSQLite` — AppleScript fallback cannot honor the filter
 

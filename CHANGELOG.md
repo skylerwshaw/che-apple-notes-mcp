@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Canonical folder identity** ([#2](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/2)): every `list_folders` row now carries `id`
+  (Core Data URI `x-coredata://<store-uuid>/ICFolder/p<pk>`, which round-trips
+  directly into `update_folder` / `delete_folder`), `uuid` (raw ZIDENTIFIER),
+  `parent_id` (parent's canonical URI, `null` for roots and missing parents),
+  and `path` (slash-joined titles from root; account-scoped, cycle-safe,
+  presentation only). The URI host is the persistent store UUID from
+  `Z_METADATA.Z_UUID`; Notes.app rejects URIs built with the account UUID.
+  Applies to the SQLite read path; the no-FDA AppleScript fallback still
+  emits the canonical `id` (as returned by AppleScript) but cannot supply
+  `uuid` / `parent_id` / `path`.
+
+### Changed
+
+- Folder `id` switched from the bare ZIDENTIFIER (which the folder write tools
+  could not consume) to the Core Data URI form, mirroring notes. The old value
+  is still available as `uuid`; `parent_pk` remains for backward compatibility.
+
 ## [0.2.0] - 2026-04-22
 
 ### Added (Apple Notes Sharing, fully spec-driven)

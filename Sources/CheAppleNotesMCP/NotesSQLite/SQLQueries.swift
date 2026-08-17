@@ -6,6 +6,10 @@ import Foundation
 enum SQLQueries {
     static let entityIDsQuery = "SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY"
 
+    /// Persistent store UUID — the host of every `x-coredata://` canonical ID.
+    /// Core Data keeps exactly one row in Z_METADATA.
+    static let storeUUIDQuery = "SELECT Z_UUID FROM Z_METADATA LIMIT 1"
+
     /// Accounts: name + identifier
     static let listAccounts = """
         SELECT Z_PK, ZNAME, ZIDENTIFIER

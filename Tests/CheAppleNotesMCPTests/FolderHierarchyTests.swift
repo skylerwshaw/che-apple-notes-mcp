@@ -18,11 +18,16 @@ import Testing
             title: title,
             accountPK: 1,
             accountName: account,
+            storeUUID: "store-uuid",
             parentPK: parent,
             isHiddenContainer: hidden,
             sortOrder: sortOrder,
             shared: shared
         )
+    }
+
+    private func byPK(_ folders: [Folder]) -> [Int64: Folder] {
+        Dictionary(uniqueKeysWithValues: folders.map { ($0.pk, $0) })
     }
 
     @Test func buildTreeReturnsRootWhenFlat() {
@@ -89,6 +94,45 @@ import Testing
         ])
         let names = results.flatMap { $0.roots.map { $0.folder.title } }
         #expect(names == ["visible"])
+    }
+
+    @Test func pathJoinsTitlesFromRoot() {
+        let folders = [
+            folder(pk: 1, title: "Root"),
+            folder(pk: 2, title: "Child", parent: 1),
+            folder(pk: 3, title: "Grandchild", parent: 2)
+        ]
+        let index = byPK(folders)
+        #expect(FolderHierarchy.path(of: folders[2], byPK: index) == "Root/Child/Grandchild")
+        #expect(FolderHierarchy.path(of: folders[0], byPK: index) == "Root")
+    }
+
+    @Test func pathWithMissingParentDegradesToRoot() {
+        let orphan = folder(pk: 1, title: "Orphan", parent: 999)
+        #expect(FolderHierarchy.path(of: orphan, byPK: byPK([orphan])) == "Orphan")
+    }
+
+    @Test func appleScriptIDUsesStoreUUIDHostAndDegradesToIdentifier() {
+        let f = folder(pk: 7, title: "F")
+        #expect(f.appleScriptID == "x-coredata://store-uuid/ICFolder/p7")
+
+        // Malformed store (no Z_METADATA row): degrade to the raw
+        // ZIDENTIFIER rather than emitting a URI with an empty host.
+        let degraded = Folder(
+            pk: 7, identifier: "folder-7", title: "F", accountPK: 1,
+            accountName: "iCloud", storeUUID: nil, parentPK: nil,
+            isHiddenContainer: false, sortOrder: nil, shared: false
+        )
+        #expect(degraded.appleScriptID == "folder-7")
+    }
+
+    @Test func pathTerminatesOnParentCycle() {
+        // A → B → A: corrupt data must not hang or recurse forever.
+        let a = folder(pk: 1, title: "A", parent: 2)
+        let b = folder(pk: 2, title: "B", parent: 1)
+        let index = byPK([a, b])
+        #expect(FolderHierarchy.path(of: a, byPK: index) == "B/A")
+        #expect(FolderHierarchy.path(of: b, byPK: index) == "A/B")
     }
 
     @Test func buildByAccountDefaultsUnknownAccountName() {

@@ -71,7 +71,7 @@ final class CheAppleNotesMCPServer {
             // Folders
             Tool(
                 name: "list_folders",
-                description: "List all note folders across all accounts. Returns hierarchy with account name, folder title, folder id, and whether folder is hidden.",
+                description: "List all note folders across all accounts. Each row carries the canonical folder id (x-coredata://... form; pass this to update_folder/delete_folder), uuid, title, account name, parent_id (null for roots), human-readable path, and whether the folder is hidden.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -428,9 +428,18 @@ final class CheAppleNotesMCPServer {
         if case .bool(let b)? = args["shared"] { sharedOnly = b }
 
         if let sqlite {
-            let folders = try sqlite.listFolders(sharedOnly: sharedOnly)
-                .filter { accountFilter == nil || $0.accountName == accountFilter }
-            return jsonify(folders.map(folderToDict))
+            // Fetch unfiltered so parent_id/path resolve against the full
+            // store even when the shared/account filters exclude a parent
+            // (e.g. a shared subfolder of an unshared root). Filters apply
+            // to the output rows only; `shared` is the same expression the
+            // reader's SQL predicate uses.
+            let all = try sqlite.listFolders()
+            let byPK = Dictionary(uniqueKeysWithValues: all.map { ($0.pk, $0) })
+            let folders = all.filter {
+                (sharedOnly == nil || $0.shared == sharedOnly)
+                    && (accountFilter == nil || $0.accountName == accountFilter)
+            }
+            return jsonify(folders.map { folderToDict($0, byPK: byPK) })
         }
         // AppleScript fallback — refuse to silently drop the shared filter.
         // The heuristic lives in SQLite; without FDA we cannot honor it.
@@ -858,12 +867,21 @@ final class CheAppleNotesMCPServer {
 
     // MARK: - Formatters
 
-    private func folderToDict(_ f: Folder) -> [String: Any] {
-        [
-            "id": f.identifier,
+    // `id` = AppleScript URL form, so folder write tools can use it directly.
+    // `uuid` = raw ZIDENTIFIER for debugging / advanced consumers.
+    // `parent_pk` kept for backward compatibility with clients that predate
+    // canonical folder identity
+    // ([#2](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/2)).
+    private func folderToDict(_ f: Folder, byPK: [Int64: Folder]) -> [String: Any] {
+        let parent = f.parentPK.flatMap { byPK[$0] }
+        return [
+            "id": f.appleScriptID,
+            "uuid": f.identifier,
             "title": f.title,
             "account_name": f.accountName ?? "",
+            "parent_id": parent?.appleScriptID as Any,
             "parent_pk": f.parentPK as Any,
+            "path": FolderHierarchy.path(of: f, byPK: byPK),
             "is_hidden": f.isHiddenContainer,
             "sort_order": f.sortOrder as Any,
             "shared": f.shared
