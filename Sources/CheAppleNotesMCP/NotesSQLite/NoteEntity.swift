@@ -5,6 +5,19 @@ import Foundation
 /// returned from SQLite can be targeted by AS write tools.
 typealias NoteID = String
 
+/// Construct the canonical ID (ADR 0001): the Core Data URI form that
+/// Notes.app's AppleScript dictionary consumes as `folder id "..."` / `note id
+/// "..."`. The URI host is the persistent store UUID (Z_METADATA.Z_UUID), NOT
+/// the account UUID; Notes rejects URIs built with the account UUID, verified
+/// against real AppleScript-returned ids. SQLite ZIDENTIFIER stores just the
+/// bare UUID, which write tools cannot consume. Shared by `Folder` and `Note`.
+func coreDataURI(store: String?, entity: String, pk: Int64, fallback: String) -> String {
+    guard let store, !store.isEmpty else {
+        return fallback  // write ops may fail
+    }
+    return "x-coredata://\(store)/\(entity)/p\(pk)"
+}
+
 struct Account {
     let pk: Int64           // Z_PK
     let name: String        // ZNAME
@@ -27,17 +40,8 @@ struct Folder {
     /// when available; SQLite heuristic is a fallback.
     let shared: Bool
 
-    /// Construct the canonical ID (ADR 0001): the Core Data URI form that
-    /// Notes.app's AppleScript dictionary consumes as `folder id "..."`.
-    /// The URI host is the persistent store UUID (Z_METADATA.Z_UUID), NOT the
-    /// account UUID; Notes rejects URIs built with the account UUID. Verified
-    /// against real AppleScript-returned ids. SQLite ZIDENTIFIER stores just
-    /// the folder UUID, which write tools cannot consume.
     var appleScriptID: String {
-        guard let store = storeUUID, !store.isEmpty else {
-            return identifier  // fallback, write ops may fail
-        }
-        return "x-coredata://\(store)/ICFolder/p\(pk)"
+        coreDataURI(store: storeUUID, entity: "ICFolder", pk: pk, fallback: identifier)
     }
 }
 
@@ -48,7 +52,7 @@ struct Note {
     let folderPK: Int64?
     let folderName: String?
     let accountName: String?
-    let accountIdentifier: String?  // account UUID, used to build AS id
+    let storeUUID: String?  // Z_METADATA.Z_UUID, host of the canonical URI
     let creationDate: Date?
     let modificationDate: Date?
     let isPinned: Bool
@@ -58,14 +62,8 @@ struct Note {
     /// share. See `Folder.shared` for the heuristic.
     let shared: Bool
 
-    /// Construct the AppleScript `note id "..."` URL form. Needed because
-    /// Notes.app's AppleScript dictionary expects `x-coredata://<acct-uuid>/ICNote/p<Z_PK>`
-    /// while SQLite ZIDENTIFIER stores just the note UUID.
     var appleScriptID: String {
-        guard let acct = accountIdentifier, !acct.isEmpty else {
-            return identifier  // fallback — write ops may fail
-        }
-        return "x-coredata://\(acct)/ICNote/p\(pk)"
+        coreDataURI(store: storeUUID, entity: "ICNote", pk: pk, fallback: identifier)
     }
 
     /// Optional body payload. Populated by `get_note` or `list_notes` with

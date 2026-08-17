@@ -65,7 +65,6 @@ enum SQLQueries {
             n.ZFOLDER,
             f.ZTITLE2 AS folder_title,
             a.ZNAME AS account_name,
-            a.ZIDENTIFIER AS account_identifier,
             COALESCE(n.ZCREATIONDATE3, n.ZCREATIONDATE2, n.ZCREATIONDATE1, n.ZCREATIONDATE) AS creation_date,
             COALESCE(n.ZMODIFICATIONDATE1, n.ZMODIFICATIONDATE) AS modification_date,
             n.ZISPINNED,

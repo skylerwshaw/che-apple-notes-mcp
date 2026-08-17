@@ -7,7 +7,7 @@ import Testing
     private func makeNote(
         pk: Int64 = 42,
         identifier: String = "note-uuid",
-        accountIdentifier: String? = "acct-uuid",
+        storeUUID: String? = "store-uuid",
         shared: Bool = false
     ) -> Note {
         Note(
@@ -17,7 +17,7 @@ import Testing
             folderPK: nil,
             folderName: nil,
             accountName: nil,
-            accountIdentifier: accountIdentifier,
+            storeUUID: storeUUID,
             creationDate: nil,
             modificationDate: nil,
             isPinned: false,
@@ -30,19 +30,19 @@ import Testing
         )
     }
 
-    @Test func appleScriptIDUsesAccountAndPrimaryKey() {
-        let n = makeNote(pk: 7, accountIdentifier: "abc")
+    @Test func appleScriptIDUsesStoreUUIDAndPrimaryKey() {
+        let n = makeNote(pk: 7, storeUUID: "abc")
         #expect(n.appleScriptID == "x-coredata://abc/ICNote/p7")
     }
 
-    @Test func appleScriptIDFallsBackWhenAccountMissing() {
-        let n = makeNote(identifier: "fallback-uuid", accountIdentifier: nil)
+    @Test func appleScriptIDFallsBackWhenStoreUUIDMissing() {
+        let n = makeNote(identifier: "fallback-uuid", storeUUID: nil)
         #expect(n.appleScriptID == "fallback-uuid")
     }
 
-    @Test func appleScriptIDFallsBackWhenAccountEmpty() {
-        let n = makeNote(identifier: "empty-acct", accountIdentifier: "")
-        #expect(n.appleScriptID == "empty-acct")
+    @Test func appleScriptIDFallsBackWhenStoreUUIDEmpty() {
+        let n = makeNote(identifier: "empty-store", storeUUID: "")
+        #expect(n.appleScriptID == "empty-store")
     }
 
     @Test func bodyDecodeErrorDefaultsFalse() {
