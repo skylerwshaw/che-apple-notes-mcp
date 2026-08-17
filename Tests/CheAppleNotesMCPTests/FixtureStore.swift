@@ -12,21 +12,22 @@ import Testing
 ///   `NotesStoreReaderTests`.
 /// - A folder hierarchy across two accounts, modeling duplicate folder names
 ///   in sibling branches, a three-deep chain, an empty folder, an orphan
-///   (missing parent row), and a hidden container:
+///   (missing parent row), and a hidden container, with one note per folder
+///   (except Empty) for recursive-listing tests:
 ///
 ///   iCloud (icloud-account-uuid)
-///   ├── Root A (pk 10)
-///   │   ├── Child A1 (pk 11)
-///   │   │   └── Grandchild A1a (pk 12)
-///   │   └── Archive (pk 13)
-///   ├── Root B (pk 14)
-///   │   └── Archive (pk 15, shared with us)
+///   ├── Root A (pk 10) — note 200
+///   │   ├── Child A1 (pk 11) — note 201
+///   │   │   └── Grandchild A1a (pk 12) — note 202
+///   │   └── Archive (pk 13) — note 203
+///   ├── Root B (pk 14) — note 204
+///   │   └── Archive (pk 15, shared with us) — note 205
 ///   ├── Empty (pk 16)
 ///   ├── Orphan (pk 17, ZPARENT=999 which doesn't exist)
 ///   └── Recently Deleted (pk 18, hidden container)
 ///
 ///   On My Mac (local-account-uuid)
-///   └── Root A (pk 20)
+///   └── Root A (pk 20) — note 206
 enum FixtureStore {
     /// Persistent store UUID (Z_METADATA.Z_UUID) — the host of every
     /// canonical `x-coredata://` ID, shared by all accounts in the store.
@@ -77,13 +78,25 @@ enum FixtureStore {
                 ZIDENTIFIER VARCHAR,
                 ZNAME VARCHAR,
                 ZTITLE VARCHAR,
+                ZTITLE1 VARCHAR,
                 ZTITLE2 VARCHAR,
                 ZOWNER INTEGER,
                 ZPARENT INTEGER,
+                ZFOLDER INTEGER,
                 ZISHIDDENNOTECONTAINER INTEGER,
                 ZSORTORDER INTEGER,
                 ZSERVERSHAREDATA BLOB,
-                ZZONEOWNERNAME VARCHAR
+                ZZONEOWNERNAME VARCHAR,
+                ZCREATIONDATE TIMESTAMP,
+                ZCREATIONDATE1 TIMESTAMP,
+                ZCREATIONDATE2 TIMESTAMP,
+                ZCREATIONDATE3 TIMESTAMP,
+                ZMODIFICATIONDATE TIMESTAMP,
+                ZMODIFICATIONDATE1 TIMESTAMP,
+                ZISPINNED INTEGER,
+                ZISPASSWORDPROTECTED INTEGER,
+                ZSNIPPET VARCHAR,
+                ZMARKEDFORDELETION INTEGER
             )
             """, on: writer)
         runStatement("""
@@ -141,6 +154,28 @@ enum FixtureStore {
                      ZISHIDDENNOTECONTAINER, ZSORTORDER, ZZONEOWNERNAME)
                 VALUES (\(pk), 15, 'folder-uuid-\(pk)', '\(title)', \(owner),
                         \(parentSQL), \(hidden), \(sort), \(zoneOwnerSQL))
+                """, on: writer)
+        }
+
+        // Notes attached to folders across the hierarchy — one per level of
+        // the three-deep iCloud chain plus both Archives and the local
+        // duplicate-titled root, so recursive descent, sibling-branch
+        // exclusion, and cross-account exclusion are all exercised by one
+        // fixture ([#3](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/3)).
+        // Columns: pk, title, folderPK.
+        let notes: [(Int64, String, Int64)] = [
+            (200, "Root A Note", 10),
+            (201, "Child A1 Note", 11),
+            (202, "Grandchild Note", 12),
+            (203, "Archive A Note", 13),
+            (204, "Root B Note", 14),
+            (205, "Archive B Note", 15),
+            (206, "Local Root A Note", 20),
+        ]
+        for (pk, title, folderPK) in notes {
+            runStatement("""
+                INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, Z_ENT, ZIDENTIFIER, ZTITLE, ZFOLDER)
+                VALUES (\(pk), 12, 'note-uuid-\(pk)', '\(title)', \(folderPK))
                 """, on: writer)
         }
 

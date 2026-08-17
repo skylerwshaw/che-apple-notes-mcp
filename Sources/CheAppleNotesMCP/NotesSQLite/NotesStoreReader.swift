@@ -163,6 +163,13 @@ final class NotesStoreReader {
 
     struct NoteListOptions {
         var folderIdentifier: String? = nil
+        /// Internal recursive-listing filter ([#3](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/3)):
+        /// when set (by the server, after expanding a folder subtree via
+        /// `FolderHierarchy.subtreePKs`), takes priority over
+        /// `folderIdentifier` and matches notes in any of these folder pks.
+        /// Pks are produced internally from already-loaded folder rows, never
+        /// from raw user input, so splicing them into SQL is safe.
+        var folderPKs: [Int64]? = nil
         var accountName: String? = nil
         var pinned: Bool? = nil
         var locked: Bool? = nil
@@ -190,7 +197,12 @@ final class NotesStoreReader {
         // AppleScript URL form `x-coredata://<store-uuid>/ICFolder/p<PK>`.
         // Extract the PK and filter on ZFOLDER when the URL form is given.
         let folderPKFromURL = Self.extractCoreDataPK(options.folderIdentifier)
-        if folderPKFromURL != nil {
+        if let pks = options.folderPKs {
+            // Recursive subtree filter takes priority. Empty set (shouldn't
+            // happen — the root folder is always included) means "match
+            // nothing" rather than falling through to an unfiltered scan.
+            extras.append(pks.isEmpty ? "0" : "n.ZFOLDER IN (\(pks.map(String.init).joined(separator: ",")))")
+        } else if folderPKFromURL != nil {
             extras.append("n.ZFOLDER = :folderPK")
         } else if options.folderIdentifier != nil {
             extras.append("f.ZIDENTIFIER = :folderIdent")

@@ -115,4 +115,21 @@ import MCP
             #expect(error.errorDescription?.contains(fdaRequiredSubstring) == true)
         }
     }
+
+    @Test func listNotesThrowsFeatureRequiresSQLiteWhenRecursiveSetWithoutSqlite() async throws {
+        // #3 — recursive subtree expansion has no AppleScript fallback.
+        let server = await CheAppleNotesMCPServer(sqlite: nil)
+        let args: [String: Value] = ["folder_id": .string("x-coredata://store/ICFolder/p1"), "recursive": .bool(true)]
+        do {
+            _ = try await server.executeToolCall(name: "list_notes", arguments: args)
+            Issue.record("expected featureRequiresSQLite throw but got success")
+        } catch let error as NotesServerError {
+            guard case .featureRequiresSQLite(let feature) = error else {
+                Issue.record("expected featureRequiresSQLite but got \(error)")
+                return
+            }
+            #expect(feature == "list_notes recursive")
+            #expect(error.errorDescription?.contains(fdaRequiredSubstring) == true)
+        }
+    }
 }

@@ -135,6 +135,58 @@ import Testing
         #expect(FolderHierarchy.path(of: b, byPK: index) == "A/B")
     }
 
+    // MARK: - subtreePKs (#3)
+
+    @Test func subtreePKsIncludesRootAndAllDescendants() {
+        let folders = [
+            folder(pk: 1, title: "Root"),
+            folder(pk: 2, title: "Child", parent: 1),
+            folder(pk: 3, title: "Grandchild", parent: 2),
+            folder(pk: 4, title: "Sibling", parent: 1)
+        ]
+        #expect(FolderHierarchy.subtreePKs(of: 1, folders: folders) == [1, 2, 3, 4])
+    }
+
+    @Test func subtreePKsExcludesSiblingBranchesAndOtherAccounts() {
+        let folders = [
+            folder(pk: 10, title: "Root A"),
+            folder(pk: 11, title: "Child A1", parent: 10),
+            folder(pk: 14, title: "Root B"),
+            folder(pk: 20, title: "Root A", account: "On My Mac")
+        ]
+        #expect(FolderHierarchy.subtreePKs(of: 10, folders: folders) == [10, 11])
+    }
+
+    @Test func subtreePKsOfLeafIsJustItself() {
+        let folders = [
+            folder(pk: 1, title: "Root"),
+            folder(pk: 2, title: "Child", parent: 1)
+        ]
+        #expect(FolderHierarchy.subtreePKs(of: 2, folders: folders) == [2])
+    }
+
+    @Test func subtreePKsExcludesHiddenContainerDescendants() {
+        let folders = [
+            folder(pk: 1, title: "Root"),
+            folder(pk: 2, title: "Recently Deleted", parent: 1, hidden: true),
+            folder(pk: 3, title: "Under Hidden", parent: 2)
+        ]
+        // pk 3 nests under the hidden container, so it can't be silently
+        // pulled into pk 1's subtree — mirrors buildByAccount's filter.
+        #expect(FolderHierarchy.subtreePKs(of: 1, folders: folders) == [1])
+        // Recursing directly on the hidden container still works.
+        #expect(FolderHierarchy.subtreePKs(of: 2, folders: folders) == [2, 3])
+    }
+
+    @Test func subtreePKsTerminatesOnParentCycle() {
+        // A → B → A: corrupt data must not hang or recurse forever.
+        let folders = [
+            folder(pk: 1, title: "A", parent: 2),
+            folder(pk: 2, title: "B", parent: 1)
+        ]
+        #expect(FolderHierarchy.subtreePKs(of: 1, folders: folders) == [1, 2])
+    }
+
     @Test func buildByAccountDefaultsUnknownAccountName() {
         let results = FolderHierarchy.buildByAccount(folders: [
             folder(pk: 1, title: "Lost", account: nil)

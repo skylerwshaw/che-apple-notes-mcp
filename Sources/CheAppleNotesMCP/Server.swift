@@ -129,12 +129,13 @@ final class CheAppleNotesMCPServer {
             // Notes
             Tool(
                 name: "list_notes",
-                description: "List notes with optional filters (folder, account, pinned, locked, date range). Fast path via SQLite; falls back to AppleScript if Full Disk Access not granted.",
+                description: "List notes with optional filters (folder, account, pinned, locked, date range). Every row carries folder_path. Fast path via SQLite; falls back to AppleScript if Full Disk Access not granted.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "folder": .object(["type": .string("string"), "description": .string("Folder name to filter by")]),
+                        "folder": .object(["type": .string("string"), "description": .string("Folder name to filter by. Errors if the name is ambiguous within scope; use folder_id instead.")]),
                         "folder_id": .object(["type": .string("string"), "description": .string("Folder id (exact match)")]),
+                        "recursive": .object(["type": .string("boolean"), "description": .string("List notes in folder_id and all its descendant folders. Requires folder_id (canonical id, not folder name). Default false.")]),
                         "account": .object(["type": .string("string"), "description": .string("Account name filter")]),
                         "pinned": .object(["type": .string("boolean"), "description": .string("Only pinned (true) or only unpinned (false)")]),
                         "locked": .object(["type": .string("boolean"), "description": .string("Only locked / only unlocked")]),
@@ -500,42 +501,86 @@ final class CheAppleNotesMCPServer {
         if args["sort"]?.stringValue == "asc" { options.sortDescending = false }
         if case .bool(let b)? = args["shared"] { options.sharedOnly = b }
 
-        // Name-based folder filter requires looking up id first.
-        if let folderName = args["folder"]?.stringValue, options.folderIdentifier == nil {
-            if let sqlite {
-                let match = try sqlite.listFolders().first {
-                    $0.title == folderName
-                        && (options.accountName == nil || $0.accountName == options.accountName)
-                }
-                if let match { options.folderIdentifier = match.identifier }
+        var recursive = false
+        if case .bool(let b)? = args["recursive"] { recursive = b }
+
+        guard let sqlite else {
+            // Recursive subtree expansion is SQLite-only — no AppleScript
+            // hierarchy fallback ([#3](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/3)).
+            if recursive {
+                throw NotesServerError.featureRequiresSQLite("list_notes recursive")
+            }
+            // AppleScript fallback — refuse to silently drop the shared filter.
+            if options.sharedOnly != nil {
+                throw NotesServerError.featureRequiresSQLite("list_notes shared filter")
+            }
+            // AppleScript fallback (limited — needs folder name)
+            let folder = args["folder"]?.stringValue ?? "Notes"
+            let rows = try applescript.listNotesInFolder(
+                folder, account: options.accountName, limit: options.limit
+            )
+            return jsonify(rows.map { row -> [String: Any] in
+                [
+                    "id": row.id,
+                    "title": row.title,
+                    "folder": folder,
+                    "creation_date": row.creationDate,
+                    "modification_date": row.modificationDate,
+                    "shared": row.shared,
+                    "source": "applescript"
+                ]
+            })
+        }
+
+        // Fetched once: name resolution, recursive subtree expansion, and
+        // folder_path on every note all need the full folder hierarchy.
+        let allFolders = try sqlite.listFolders()
+        let byPK = Dictionary(uniqueKeysWithValues: allFolders.map { ($0.pk, $0) })
+
+        if recursive {
+            // byPK[rootPK] != nil rejects a well-formed-looking but unknown
+            // id (wrong entity, stale/deleted folder) — without it the pk
+            // still reaches the SQL filter and just matches zero notes,
+            // which reads as "empty folder" instead of "invalid folder_id".
+            guard let folderID = options.folderIdentifier,
+                  let rootPK = NotesStoreReader.extractCoreDataPK(folderID),
+                  byPK[rootPK] != nil
+            else {
+                throw NotesServerError.invalidArgument(
+                    "list_notes recursive requires folder_id as a canonical id (x-coredata://... form from list_folders output) matching a known folder, not a folder name"
+                )
+            }
+            options.folderPKs = Array(FolderHierarchy.subtreePKs(of: rootPK, folders: allFolders))
+            options.folderIdentifier = nil
+        } else if let folderName = args["folder"]?.stringValue, options.folderIdentifier == nil {
+            // Name-based folder filter — error on ambiguity instead of
+            // silently taking the first match, and on no match instead of
+            // silently falling through to an unfiltered listing. Deliberately
+            // NOT narrowed by `shared`: that option filters notes by their
+            // own share status, not folders by theirs — a shared folder can
+            // hold non-shared-flagged notes, so folding it into folder
+            // disambiguation would silently exclude legitimate matches.
+            let matches = allFolders.filter {
+                $0.title == folderName
+                    && (options.accountName == nil || $0.accountName == options.accountName)
+            }
+            switch matches.count {
+            case 0:
+                let scope = options.accountName.map { " in account '\($0)'" } ?? ""
+                throw NotesServerError.invalidArgument("Folder '\(folderName)' not found\(scope)")
+            case 1:
+                options.folderIdentifier = matches[0].identifier
+            default:
+                throw NotesServerError.ambiguousFolderName(
+                    name: folderName,
+                    account: options.accountName,
+                    paths: matches.map { FolderHierarchy.path(of: $0, byPK: byPK) }
+                )
             }
         }
 
-        if let sqlite {
-            let notes = try sqlite.listNotes(options: options)
-            return jsonify(notes.map(noteToDict))
-        }
-
-        // AppleScript fallback — refuse to silently drop the shared filter.
-        if options.sharedOnly != nil {
-            throw NotesServerError.featureRequiresSQLite("list_notes shared filter")
-        }
-        // AppleScript fallback (limited — needs folder name)
-        let folder = args["folder"]?.stringValue ?? "Notes"
-        let rows = try applescript.listNotesInFolder(
-            folder, account: options.accountName, limit: options.limit
-        )
-        return jsonify(rows.map { row -> [String: Any] in
-            [
-                "id": row.id,
-                "title": row.title,
-                "folder": folder,
-                "creation_date": row.creationDate,
-                "modification_date": row.modificationDate,
-                "shared": row.shared,
-                "source": "applescript"
-            ]
-        })
+        let notes = try sqlite.listNotes(options: options)
+        return jsonify(notes.map { noteToDict($0, byPK: byPK) })
     }
 
     private func handleListNotesQuick(_ args: [String: Value]) throws -> String {
@@ -561,7 +606,7 @@ final class CheAppleNotesMCPServer {
 
         if let sqlite {
             let notes = try sqlite.listNotes(options: options)
-            return jsonify(notes.map(noteToDict))
+            return jsonify(notes.map { noteToDict($0) })
         }
         throw NotesServerError.featureRequiresSQLite("list_notes_quick")
     }
@@ -710,7 +755,7 @@ final class CheAppleNotesMCPServer {
                 limit: limit,
                 sharedOnly: sharedOnly
             )
-            return jsonify(results.map(noteToDict))
+            return jsonify(results.map { noteToDict($0) })
         }
         throw NotesServerError.featureRequiresSQLite("search_notes")
     }
@@ -888,7 +933,11 @@ final class CheAppleNotesMCPServer {
         ]
     }
 
-    private func noteToDict(_ n: Note) -> [String: Any] {
+    // `byPK` is only passed by `list_notes` — folder_path is scoped to that
+    // tool per [#3](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/3);
+    // other callers (get_note, search_notes, list_notes_quick) keep their
+    // existing shape unchanged.
+    private func noteToDict(_ n: Note, byPK: [Int64: Folder]? = nil) -> [String: Any] {
         // `id` = AppleScript URL form, so write tools can use it directly.
         // `uuid` = raw ZIDENTIFIER for debugging / advanced consumers.
         var dict: [String: Any] = [
@@ -902,6 +951,10 @@ final class CheAppleNotesMCPServer {
             "snippet": n.snippet ?? "",
             "shared": n.shared,
         ]
+        if let byPK {
+            let folder = n.folderPK.flatMap { byPK[$0] }
+            dict["folder_path"] = folder.map { FolderHierarchy.path(of: $0, byPK: byPK) } ?? ""
+        }
         if let d = n.creationDate {
             dict["created_at"] = iso8601.string(from: d)
         }
@@ -946,6 +999,11 @@ enum NotesServerError: LocalizedError {
     case unknownTool(String)
     case invalidArgument(String)
     case featureRequiresSQLite(String)
+    /// A folder-name filter matched more than one folder in scope
+    /// ([#3](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/3)).
+    /// `paths` names the conflicting folders so the caller can tell them
+    /// apart and switch to `folder_id`.
+    case ambiguousFolderName(name: String, account: String?, paths: [String])
 
     var errorDescription: String? {
         switch self {
@@ -953,6 +1011,9 @@ enum NotesServerError: LocalizedError {
         case .invalidArgument(let m): return m
         case .featureRequiresSQLite(let f):
             return "Feature '\(f)' requires Full Disk Access. Run --setup for instructions."
+        case .ambiguousFolderName(let name, let account, let paths):
+            let scope = account.map { " in account '\($0)'" } ?? ""
+            return "Folder name '\(name)' is ambiguous\(scope): matches \(paths.joined(separator: ", ")). Use folder_id instead."
         }
     }
 }

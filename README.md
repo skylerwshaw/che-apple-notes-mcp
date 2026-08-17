@@ -129,7 +129,7 @@ Useful for launchd jobs, shell scripts, CI pipelines, and agents that prefer sub
 
 | Tool | Description |
 |------|-------------|
-| `list_notes` | List notes with filters (folder, account, pinned, locked, date range, shared). |
+| `list_notes` | List notes with filters (folder, account, pinned, locked, date range, shared). Every row carries `folder_path`; `recursive: true` (with `folder_id`) lists a folder's entire subtree in one call. |
 | `list_notes_quick` | Preset ranges: `recent`, `today`, `this_week`, `pinned` |
 | `get_note` | Fetch a single note with full body (text + HTML) and metadata |
 | `create_note` | Create a note (body_text XOR body_html), optional folder + account |
@@ -217,6 +217,7 @@ Without Full Disk Access:
 - `list_folders`, `list_notes`, `get_note` fall back to AppleScript (same result, 50–500× slower; `list_folders` rows keep the canonical `id` but omit `uuid` / `parent_id` / `path`)
 - `list_notes_quick`, `search_notes`, `get_share_metadata` error out (they require SQLite)
 - `list_folders` / `list_notes` / `search_notes` with `shared: true|false` throw `featureRequiresSQLite` — AppleScript fallback cannot honor the filter
+- `list_notes` with `recursive: true` throws `featureRequiresSQLite` — subtree expansion has no AppleScript hierarchy fallback
 
 ## Same-Name Folder Disambiguation
 
@@ -232,6 +233,19 @@ When folder names collide across accounts (e.g., "Notes" on iCloud and On My Mac
 ```
 
 Available account names typically include `iCloud`, `On My Mac`, plus any configured accounts (Gmail, Yahoo, etc.). Use `list_folders` to inspect.
+
+`list_notes`'s `folder` parameter applies the same rule: if the name matches more than one folder in scope (e.g. two `Archive` folders in different branches of the same account), the call errors naming the conflicting paths instead of silently listing the first match. Pass `folder_id` (from `list_folders`) to address a specific folder unambiguously.
+
+## Recursive Note Listing
+
+`list_notes(folder_id: "...", recursive: true)` returns notes from that folder and every descendant folder (its whole subtree), each carrying a `folder_path`. It requires a canonical `folder_id` (from `list_folders`, not a folder name) and SQLite access; descendant folders are resolved in-process from the already-loaded folder hierarchy, so it's one query regardless of subtree depth.
+
+```json
+{
+  "folder_id": "x-coredata://.../ICFolder/p42",
+  "recursive": true
+}
+```
 
 ## Known Limits
 
