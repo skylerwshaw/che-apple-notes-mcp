@@ -1,27 +1,17 @@
-<!-- SPECTRA:START v1.0.1 -->
+# Project Instructions
 
-# Spectra Instructions
+Spectra (`openspec/`, `.spectra.yaml`) is the upstream maintainer's workflow — do not use it in this clone. Plan work with the Matt Pocock engineering skills instead.
 
-This project uses Spectra for Spec-Driven Development(SDD). Specs live in `openspec/specs/`, change proposals in `openspec/changes/`.
+## Agent skills
 
-## Use `/spectra:*` skills when:
+### Issue tracker
 
-- A discussion needs structure before coding → `/spectra:discuss`
-- User wants to plan, propose, or design a change → `/spectra:propose`
-- Tasks are ready to implement → `/spectra:apply`
-- There's an in-progress change to continue → `/spectra:ingest`
-- User asks about specs or how something works → `/spectra:ask`
-- Implementation is done → `/spectra:archive`
+Issues live in this repo's GitHub Issues, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
-## Workflow
+### Triage labels
 
-discuss? → propose → apply ⇄ ingest → archive
+Default label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
 
-- `discuss` is optional — skip if requirements are clear
-- Requirements change mid-work? Plan mode → `ingest` → resume `apply`
+### Domain docs
 
-## Parked Changes
-
-Changes can be parked（暫存）— temporarily moved out of `openspec/changes/`. Parked changes won't appear in `spectra list` but can be found with `spectra list --parked`. To restore: `spectra unpark <name>`. The `/spectra:apply` and `/spectra:ingest` skills handle parked changes automatically.
-
-<!-- SPECTRA:END -->
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
