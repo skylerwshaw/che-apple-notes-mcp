@@ -42,14 +42,22 @@ func settleForNotesFlush() async throws {
 /// constructing `MCPClient` directly.
 private actor SharedServer {
     static let instance = SharedServer()
-    private var client: MCPClient?
+    private var spawn: Task<MCPClient, Error>?
 
+    /// Memoizes the in-flight spawn as a Task BEFORE the first await: actors
+    /// are reentrant, so a bare `if client == nil` check let every
+    /// concurrently-starting suite race past it and spawn its own server
+    /// (observed: 8 processes at once, whose blocking stderr drains then
+    /// starved the cooperative thread pool and deadlocked the entire run).
     func get() async throws -> MCPClient {
-        if let client { return client }
-        let fresh = try MCPClient()
-        _ = try await fresh.initialize()
-        client = fresh
-        return fresh
+        if spawn == nil {
+            spawn = Task {
+                let fresh = try MCPClient()
+                _ = try await fresh.initialize()
+                return fresh
+            }
+        }
+        return try await spawn!.value
     }
 }
 

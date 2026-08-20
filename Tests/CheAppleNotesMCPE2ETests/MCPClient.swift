@@ -98,9 +98,12 @@ actor MCPClient {
         _ = fcntl(self.stdoutHandle.fileDescriptor, F_SETFL, O_NONBLOCK)
 
         // Drain stderr in background so the server doesn't block on a full pipe.
-        // No isolated state mutated here, so this is safe off-actor.
+        // Must be a real Thread, not Task.detached: `availableData` blocks, and
+        // a blocked cooperative-pool thread is never returned to the pool — a
+        // handful of clients alive at once (parallel suites) can starve the
+        // pool and deadlock the whole test run.
         let stderrHandle = stderrPipe.fileHandleForReading
-        Task.detached {
+        Thread.detachNewThread {
             while true {
                 let chunk = stderrHandle.availableData
                 if chunk.isEmpty { break }
