@@ -162,20 +162,34 @@ enum FixtureStore {
         // duplicate-titled root, so recursive descent, sibling-branch
         // exclusion, and cross-account exclusion are all exercised by one
         // fixture ([#3](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/3)).
-        // Columns: pk, title, folderPK.
-        let notes: [(Int64, String, Int64)] = [
-            (200, "Root A Note", 10),
-            (201, "Child A1 Note", 11),
-            (202, "Grandchild Note", 12),
-            (203, "Archive A Note", 13),
-            (204, "Root B Note", 14),
-            (205, "Archive B Note", 15),
-            (206, "Local Root A Note", 20),
+        //
+        // Modification dates are stamped relative to build time so
+        // `list_notes_quick`'s date arithmetic has something to bite on: 200
+        // is inside "today", 202 inside "recent" but not "today", 203 outside
+        // both, and the undated rest are outside every date range (a NULL
+        // date fails the `>=` predicate). 204 is the only pinned row.
+        // 200 is stamped at build time exactly, not slightly before it, so
+        // "today" cannot go flaky in the seconds after local midnight.
+        // Columns: pk, title, folderPK, modified (seconds before build time),
+        // pinned.
+        let day = 86_400.0
+        let notes: [(Int64, String, Int64, Double?, Int)] = [
+            (200, "Root A Note", 10, 0, 0),
+            (201, "Child A1 Note", 11, nil, 0),
+            (202, "Grandchild Note", 12, 10 * day, 0),
+            (203, "Archive A Note", 13, 90 * day, 0),
+            (204, "Root B Note", 14, nil, 1),
+            (205, "Archive B Note", 15, nil, 0),
+            (206, "Local Root A Note", 20, nil, 0),
         ]
-        for (pk, title, folderPK) in notes {
+        let buildTime = Date().timeIntervalSinceReferenceDate
+        for (pk, title, folderPK, secondsAgo, pinned) in notes {
+            let modifiedSQL = secondsAgo.map { String(buildTime - $0) } ?? "NULL"
             runStatement("""
-                INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, Z_ENT, ZIDENTIFIER, ZTITLE, ZFOLDER)
-                VALUES (\(pk), 12, 'note-uuid-\(pk)', '\(title)', \(folderPK))
+                INSERT INTO ZICCLOUDSYNCINGOBJECT
+                    (Z_PK, Z_ENT, ZIDENTIFIER, ZTITLE, ZFOLDER, ZMODIFICATIONDATE, ZISPINNED)
+                VALUES (\(pk), 12, 'note-uuid-\(pk)', '\(title)', \(folderPK),
+                        \(modifiedSQL), \(pinned))
                 """, on: writer)
         }
 

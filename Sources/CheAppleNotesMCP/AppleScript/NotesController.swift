@@ -1,7 +1,8 @@
 import AppKit
 import Foundation
 
-/// Dispatches AppleScript sources to Notes.app and unpacks results.
+/// Production adapter for the Scripting seam (`NotesScripting`):
+/// dispatches AppleScript sources to Notes.app and unpacks results.
 ///
 /// All write operations go through here. Read fallbacks (when FDA is not
 /// granted) also use this class.
@@ -11,7 +12,7 @@ import Foundation
 /// serializes NSAppleScript's shared OSA component state (concurrent
 /// executions were observed crossing their results) and keeps the Apple
 /// Event reply wait on the thread whose event queue receives the reply.
-final class NotesController: @unchecked Sendable {
+final class NotesController: NotesScripting, @unchecked Sendable {
 
     enum ControllerError: LocalizedError {
         case executionFailed(number: Int, message: String)
@@ -115,19 +116,12 @@ final class NotesController: @unchecked Sendable {
 
     // MARK: - Folders
 
-    struct ASFolderRow {
-        let accountName: String
-        let folderName: String
-        let folderID: String
-        let shared: Bool
-    }
-
-    func listFolders() throws -> [ASFolderRow] {
+    func listFolders() throws -> [ScriptedFolderRow] {
         let lines = try runReturningList(NoteScriptBuilder.listFolders())
         return lines.compactMap { line in
             let parts = line.components(separatedBy: "\t")
             guard parts.count == 4 else { return nil }
-            return ASFolderRow(
+            return ScriptedFolderRow(
                 accountName: parts[0],
                 folderName: parts[1],
                 folderID: parts[2],
@@ -174,22 +168,14 @@ final class NotesController: @unchecked Sendable {
 
     // MARK: - Notes (read fallback)
 
-    struct ASNoteRow {
-        let id: String
-        let title: String
-        let creationDate: String
-        let modificationDate: String
-        let shared: Bool
-    }
-
-    func listNotesInFolder(_ folderName: String, account: String?, limit: Int?) throws -> [ASNoteRow] {
+    func listNotesInFolder(_ folderName: String, account: String?, limit: Int?) throws -> [ScriptedNoteRow] {
         let lines = try runReturningList(NoteScriptBuilder.listNotesInFolder(
             folderName: folderName, account: account, limit: limit
         ))
         return lines.compactMap { line in
             let parts = line.components(separatedBy: "\t")
             guard parts.count == 5 else { return nil }
-            return ASNoteRow(
+            return ScriptedNoteRow(
                 id: parts[0], title: parts[1],
                 creationDate: parts[2], modificationDate: parts[3],
                 shared: parts[4] == "true"
@@ -201,26 +187,16 @@ final class NotesController: @unchecked Sendable {
         try runReturningString(NoteScriptBuilder.getNoteBody(id: id))
     }
 
-    struct ASNoteFull {
-        let title: String
-        let bodyHTML: String
-        let creationDate: String
-        let modificationDate: String
-        let folderName: String
-        let accountName: String
-        let shared: Bool
-    }
-
     /// Fetch full note metadata + body in one AppleScript roundtrip.
     /// Used when SQLite is unavailable (FDA not granted). Returns nil if the
     /// note cannot be found or the response is malformed.
-    func getNoteFull(id: String) throws -> ASNoteFull {
+    func getNoteFull(id: String) throws -> ScriptedNote {
         let raw = try runReturningString(NoteScriptBuilder.getNoteFull(id: id))
         let parts = raw.components(separatedBy: "\t")
         guard parts.count == 7 else {
             throw ControllerError.unexpectedResult("getNoteFull returned \(parts.count) fields, expected 7")
         }
-        return ASNoteFull(
+        return ScriptedNote(
             title: parts[0],
             bodyHTML: parts[1],
             creationDate: parts[2],

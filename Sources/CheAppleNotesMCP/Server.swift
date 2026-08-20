@@ -3,15 +3,16 @@ import Foundation
 import MCP
 
 /// MCP server for Apple Notes.app. Routes read tools to `NotesStoreReader`
-/// (SQLite fast path, with AppleScript fallback) and write tools to
-/// `NotesController` (AppleScript).
+/// (SQLite fast path, falling back to Scripting) and everything the server
+/// asks Notes.app to do to `NotesScripting`. Both are injected seams, so the
+/// whole tool surface is reachable in unit tests.
 final class CheAppleNotesMCPServer {
     private let server: Server
     private let transport: SerializedStdioTransport
     private let tools: [Tool]
 
     private let sqlite: NotesStoreReader?
-    private let applescript = NotesController()
+    private let scripting: NotesScripting
     private let undoStack = UndoStack()
     // Read-repair (ADR 0002, [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)):
     // ids this server recently wrote read live via AppleScript in get_note.
@@ -35,8 +36,13 @@ final class CheAppleNotesMCPServer {
     /// paths without touching the real Notes store on disk. The parameter is
     /// applied verbatim — `nil` forces the FDA-missing code path regardless
     /// of the host's real capabilities.
-    init(sqlite: NotesStoreReader?) async {
+    ///
+    /// `scripting` is the same seam for the write side: production takes the
+    /// default `NotesController`, unit tests inject `FakeNotesApp` so every
+    /// write tool is reachable without a live Notes.app.
+    init(sqlite: NotesStoreReader?, scripting: NotesScripting = NotesController()) async {
         self.sqlite = sqlite
+        self.scripting = scripting
         self.tools = Self.defineTools()
         self.server = Server(
             name: AppVersion.name,
@@ -435,7 +441,7 @@ final class CheAppleNotesMCPServer {
         if sharedOnly != nil {
             throw NotesServerError.featureRequiresSQLite("list_folders shared filter")
         }
-        let rows = try applescript.listFolders()
+        let rows = try scripting.listFolders()
             .filter { accountFilter == nil || $0.accountName == accountFilter }
         let dicts = rows.map { row -> [String: Any] in
             [
@@ -452,20 +458,20 @@ final class CheAppleNotesMCPServer {
     private func handleCreateFolder(_ args: [String: Value]) throws -> String {
         let title = try requireString(args, "title")
         let account = args["account"]?.stringValue
-        let id = try applescript.createFolder(title: title, account: account)
+        let id = try scripting.createFolder(title: title, account: account)
         return jsonify(["id": id, "title": title, "account": account ?? ""])
     }
 
     private func handleUpdateFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
         let title = try requireString(args, "title")
-        _ = try applescript.renameFolder(id: id, newTitle: title)
+        _ = try scripting.renameFolder(id: id, newTitle: title)
         return jsonify(["id": id, "title": title])
     }
 
     private func handleDeleteFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-        try applescript.deleteFolder(id: id)
+        try scripting.deleteFolder(id: id)
         return jsonify(["id": id, "deleted": true])
     }
 
@@ -501,7 +507,7 @@ final class CheAppleNotesMCPServer {
             }
             // AppleScript fallback (limited — needs folder name)
             let folder = args["folder"]?.stringValue ?? "Notes"
-            let rows = try applescript.listNotesInFolder(
+            let rows = try scripting.listNotesInFolder(
                 folder, account: options.accountName, limit: options.limit
             )
             return jsonify(rows.map { row -> [String: Any] in
@@ -621,7 +627,7 @@ final class CheAppleNotesMCPServer {
         // just-deleted id errors here (not-found) instead of resurrecting
         // the stale row.
         if recentWrites.isFresh(id) {
-            return try getNoteViaAppleScript(id: id)
+            return try getNoteViaScripting(id: id)
         }
         if let sqlite, let note = try sqlite.getNote(identifier: id) {
             var dict = noteToDict(note)
@@ -630,7 +636,7 @@ final class CheAppleNotesMCPServer {
             // The last two leave `bodyDecodeError` false, so keying the
             // fallback off that flag alone silently returns an empty body.
             if note.bodyDecodeError || dict["body_text"] == nil {
-                if let html = try? applescript.getNoteBody(id: id) {
+                if let html = try? scripting.getNoteBody(id: id) {
                     dict["body_html"] = html
                     dict["body_text"] = BodyHTMLRenderer.htmlToPlaintext(html)
                     dict["body_decode_error"] = false
@@ -640,14 +646,14 @@ final class CheAppleNotesMCPServer {
             return jsonify(dict)
         }
         // AppleScript fallback — fetch title + metadata + body in one roundtrip.
-        return try getNoteViaAppleScript(id: id)
+        return try getNoteViaScripting(id: id)
     }
 
-    /// Full-note live read via AppleScript. Shared by the SQLite-unavailable
+    /// Full-note live read via Scripting. Shared by the SQLite-unavailable
     /// fallback and the read-repair path (ADR 0002); response shape
     /// (including `source`) is established and kept identical for both.
-    private func getNoteViaAppleScript(id: String) throws -> String {
-        let full = try applescript.getNoteFull(id: id)
+    private func getNoteViaScripting(id: String) throws -> String {
+        let full = try scripting.getNoteFull(id: id)
         return jsonify([
             "id": id,
             "title": full.title,
@@ -671,7 +677,7 @@ final class CheAppleNotesMCPServer {
         let folder = args["folder"]?.stringValue
         let account = args["account"]?.stringValue
 
-        let id = try applescript.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
+        let id = try scripting.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
         undoStack.record(.create(id: id))
         recentWrites.record(id)
         return jsonify([
@@ -699,7 +705,7 @@ final class CheAppleNotesMCPServer {
             oldBodyHTML = existing.bodyHTML
         }
 
-        _ = try applescript.updateNote(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
+        _ = try scripting.updateNote(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
         undoStack.record(.update(
             id: id,
             oldTitle: oldTitle, oldBodyHTML: oldBodyHTML,
@@ -724,7 +730,7 @@ final class CheAppleNotesMCPServer {
             capturedAccount = existing.accountName
         }
 
-        try applescript.deleteNote(id: id)
+        try scripting.deleteNote(id: id)
         undoStack.record(.delete(
             id: id, title: capturedTitle, bodyHTML: capturedBodyHTML,
             folder: capturedFolder, account: capturedAccount
@@ -743,7 +749,7 @@ final class CheAppleNotesMCPServer {
             fromFolder = existing.folderName ?? ""
         }
 
-        _ = try applescript.moveNote(id: id, toFolderName: folder, account: account)
+        _ = try scripting.moveNote(id: id, toFolderName: folder, account: account)
         undoStack.record(.move(id: id, fromFolder: fromFolder, account: account, toFolder: folder))
         recentWrites.record(id)
         return jsonify(["id": id, "moved_to": folder])
@@ -822,13 +828,13 @@ final class CheAppleNotesMCPServer {
 
     private func handlePrepareShareNote(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-        try applescript.prepareShareNote(id: id)
+        try scripting.prepareShareNote(id: id)
         return jsonify(["prepared": true, "id": id] as [String: Any])
     }
 
     private func handlePrepareShareFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-        try applescript.prepareShareFolder(id: id)
+        try scripting.prepareShareFolder(id: id)
         return jsonify(["prepared": true, "id": id] as [String: Any])
     }
 
@@ -854,7 +860,7 @@ final class CheAppleNotesMCPServer {
                 account: obj["account"]?.stringValue
             ))
         }
-        let ids = try applescript.createNotesBatch(entries)
+        let ids = try scripting.createNotesBatch(entries)
         for id in ids {
             undoStack.record(.create(id: id))
             recentWrites.record(id)
@@ -870,7 +876,7 @@ final class CheAppleNotesMCPServer {
         let folder = try requireString(args, "folder")
         let account = args["account"]?.stringValue
 
-        try applescript.moveNotesBatch(ids, toFolderName: folder, account: account)
+        try scripting.moveNotesBatch(ids, toFolderName: folder, account: account)
         for id in ids { recentWrites.record(id) }
         return jsonify(["moved_count": ids.count, "destination": folder] as [String: Any])
     }
@@ -880,7 +886,7 @@ final class CheAppleNotesMCPServer {
             throw NotesServerError.invalidArgument("ids must be an array")
         }
         let ids = idsArr.compactMap { $0.stringValue }
-        try applescript.deleteNotesBatch(ids)
+        try scripting.deleteNotesBatch(ids)
         for id in ids { recentWrites.record(id) }
         return jsonify(["deleted_count": ids.count] as [String: Any])
     }
@@ -893,18 +899,18 @@ final class CheAppleNotesMCPServer {
         }
         switch op {
         case .create(let id):
-            try applescript.deleteNote(id: id)
+            try scripting.deleteNote(id: id)
             recentWrites.record(id)
         case .update(let id, let oldTitle, let oldBodyHTML, _, _):
-            _ = try applescript.updateNote(id: id, newTitle: oldTitle, newBodyHTML: oldBodyHTML)
+            _ = try scripting.updateNote(id: id, newTitle: oldTitle, newBodyHTML: oldBodyHTML)
             recentWrites.record(id)
         case .delete(_, let title, let bodyHTML, let folder, let account):
             // Recreation mints a new id; record that one. The old id was
             // already recorded by the delete and correctly reads not-found.
-            let newID = try applescript.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
+            let newID = try scripting.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
             recentWrites.record(newID)
         case .move(let id, let fromFolder, let account, _):
-            _ = try applescript.moveNote(id: id, toFolderName: fromFolder, account: account)
+            _ = try scripting.moveNote(id: id, toFolderName: fromFolder, account: account)
             recentWrites.record(id)
         }
         return jsonify(["undone": true, "operation": op.humanDescription] as [String: Any])
@@ -919,13 +925,13 @@ final class CheAppleNotesMCPServer {
             // Can't recreate a deleted id — report failure
             return jsonify(["redone": false, "reason": "create redo requires new create call", "id": id] as [String: Any])
         case .update(let id, _, _, let newTitle, let newBodyHTML):
-            _ = try applescript.updateNote(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
+            _ = try scripting.updateNote(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
             recentWrites.record(id)
         case .delete(let id, _, _, _, _):
-            try applescript.deleteNote(id: id)
+            try scripting.deleteNote(id: id)
             recentWrites.record(id)
         case .move(let id, _, let account, let toFolder):
-            _ = try applescript.moveNote(id: id, toFolderName: toFolder, account: account)
+            _ = try scripting.moveNote(id: id, toFolderName: toFolder, account: account)
             recentWrites.record(id)
         }
         return jsonify(["redone": true, "operation": op.humanDescription] as [String: Any])
