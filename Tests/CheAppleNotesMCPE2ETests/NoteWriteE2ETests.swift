@@ -32,6 +32,11 @@ import Testing
                 arguments: #"{"id":"\#(created.id)","title":"After"}"#
             )
             #expect(!update.isError)
+            // get_note is a SQLite-backed read, so it needs the flush like any
+            // other. It only passed without one while canonical ids missed in
+            // SQLite and fell through to AppleScript
+            // ([#7](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/7)).
+            try await settleForNotesFlush()
 
             let get = try await client.callTool(
                 name: "get_note",
@@ -129,6 +134,7 @@ import Testing
                 arguments: #"{"id":"\#(row.id)","title":"\#(renamed)"}"#
             )
             #expect(!update.isError)
+            try await settleForNotesFlush()
 
             let get = try await client.callTool(
                 name: "get_note",
