@@ -98,6 +98,70 @@ import Testing
         }
     }
 
+    @Test func updateNoteThenImmediateGetNoteReturnsUpdatedTitle() async throws {
+        // Read-repair acceptance for
+        // [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)
+        // (ADR 0002): get_note on an id this server just wrote reads live
+        // via AppleScript, so no settle sleep or polling is needed even
+        // though the SQLite store lags a rename by 4-8s.
+        try await withFixtureFolder { client, fixture in
+            let createResult = try await client.callTool(
+                name: "create_note",
+                arguments: #"{"title":"Before","body_text":"x","folder":"\#(fixture.name)"}"#
+            )
+            struct Created: Decodable { let id: String }
+            let created = try JSONDecoder().decode(Created.self, from: Data(createResult.text.utf8))
+            #expect(created.id.hasPrefix("x-coredata://"))
+
+            let update = try await client.callTool(
+                name: "update_note",
+                arguments: #"{"id":"\#(created.id)","title":"After"}"#
+            )
+            #expect(!update.isError)
+
+            // Deliberately no settleForNotesFlush()/eventually(): the whole
+            // point is that the immediate read is already fresh.
+            let get = try await client.callTool(
+                name: "get_note",
+                arguments: #"{"id":"\#(created.id)"}"#
+            )
+            #expect(!get.isError)
+            struct Fetched: Decodable { let title: String; let source: String? }
+            let fetched = try JSONDecoder().decode(Fetched.self, from: Data(get.text.utf8))
+            #expect(fetched.title == "After")
+            #expect(fetched.source == "applescript")
+        }
+    }
+
+    @Test func deleteNoteThenImmediateGetNoteReturnsNotFound() async throws {
+        // Read-repair acceptance for
+        // [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)
+        // (ADR 0002): a just-deleted id must report not-found via the live
+        // AppleScript read, not serve the stale SQLite row.
+        try await withFixtureFolder { client, fixture in
+            let createResult = try await client.callTool(
+                name: "create_note",
+                arguments: #"{"title":"Gone","body_text":"x","folder":"\#(fixture.name)"}"#
+            )
+            struct Created: Decodable { let id: String }
+            let created = try JSONDecoder().decode(Created.self, from: Data(createResult.text.utf8))
+
+            let delete = try await client.callTool(
+                name: "delete_note",
+                arguments: #"{"id":"\#(created.id)"}"#
+            )
+            #expect(!delete.isError)
+
+            // Deliberately no settle sleep: the deleted id must not be
+            // readable even while the SQLite store still holds its row.
+            let get = try await client.callTool(
+                name: "get_note",
+                arguments: #"{"id":"\#(created.id)"}"#
+            )
+            #expect(get.isError)
+        }
+    }
+
     @Test func createdNoteListsWithCanonicalIDThatRoundTrips() async throws {
         // Acceptance for [#5](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/5):
         // a note created via create_note shows up in list_notes with an `id`
