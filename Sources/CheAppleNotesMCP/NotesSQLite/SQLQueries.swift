@@ -10,14 +10,6 @@ enum SQLQueries {
     /// Core Data keeps exactly one row in Z_METADATA.
     static let storeUUIDQuery = "SELECT Z_UUID FROM Z_METADATA LIMIT 1"
 
-    /// Accounts: name + identifier
-    static let listAccounts = """
-        SELECT Z_PK, ZNAME, ZIDENTIFIER
-        FROM ZICCLOUDSYNCINGOBJECT
-        WHERE Z_ENT = :entityID AND ZNAME IS NOT NULL
-        ORDER BY ZNAME
-        """
-
     /// Folders. We intentionally select multiple potential title/account FK
     /// columns and pick the non-null one at runtime — schema varies by macOS.
     ///
@@ -79,9 +71,6 @@ enum SQLQueries {
         WHERE n.Z_ENT = :noteEntityID
           AND (n.ZMARKEDFORDELETION IS NULL OR n.ZMARKEDFORDELETION = 0)
         """
-
-    /// Single note by identifier.
-    static let noteByIdentifier = listNotes + "\n  AND n.ZIDENTIFIER = :identifier LIMIT 1"
 
     /// Body blob lookup. ZICNOTEDATA.ZNOTE is FK to ZICCLOUDSYNCINGOBJECT.Z_PK
     /// of the note row.

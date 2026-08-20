@@ -10,12 +10,6 @@ import Testing
         #expect(SQLQueries.entityIDsQuery.contains("Z_NAME"))
     }
 
-    @Test func listAccountsFiltersByEntityParameter() {
-        #expect(SQLQueries.listAccounts.contains(":entityID"))
-        #expect(SQLQueries.listAccounts.contains("ZICCLOUDSYNCINGOBJECT"))
-        #expect(SQLQueries.listAccounts.contains("ZNAME"))
-    }
-
     @Test func listFoldersIsComposableFromBaseAndOrderSuffix() {
         // Hardening (#6 F6): eliminate the replacingOccurrences splice in
         // listFolders(sharedOnly:) by exposing the query as base + order
@@ -101,12 +95,6 @@ import Testing
         // Two columns: shared (aggregate heuristic) + server_share_data_present.
         #expect(SQLQueries.sharedRootObjectHeuristic.contains("AS shared"))
         #expect(SQLQueries.sharedRootObjectHeuristic.contains("AS server_share_data_present"))
-    }
-
-    @Test func noteByIdentifierAppendsIdentifierFilterAndLimit() {
-        #expect(SQLQueries.noteByIdentifier.hasPrefix(SQLQueries.listNotes))
-        #expect(SQLQueries.noteByIdentifier.contains(":identifier"))
-        #expect(SQLQueries.noteByIdentifier.contains("LIMIT 1"))
     }
 
     @Test func noteBodyBlobReturnsZDATAAndEncryptedFlag() {

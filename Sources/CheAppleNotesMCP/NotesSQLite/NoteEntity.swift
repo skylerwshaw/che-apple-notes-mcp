@@ -18,12 +18,6 @@ func coreDataURI(store: String?, entity: String, pk: Int64, fallback: String) ->
     return "x-coredata://\(store)/\(entity)/p\(pk)"
 }
 
-struct Account {
-    let pk: Int64           // Z_PK
-    let name: String        // ZNAME
-    let identifier: String  // ZIDENTIFIER (e.g., "LocalAccount", "<icloud-uuid>")
-}
-
 struct Folder {
     let pk: Int64
     let identifier: String  // ZIDENTIFIER
@@ -75,15 +69,4 @@ struct Note {
     /// attempt decode) or when protobuf decode failed. Callers may fall back to
     /// AppleScript for body.
     var bodyDecodeError: Bool = false
-}
-
-struct Attachment {
-    let pk: Int64
-    let identifier: String
-    let filename: String?
-    let typeUTI: String?
-    let parentNotePK: Int64?
-    /// Local path inside `~/Library/Group Containers/group.com.apple.notes/Accounts/<acct>/Media/<attach>/`.
-    /// Requires FDA to read.
-    var localPath: String?
 }

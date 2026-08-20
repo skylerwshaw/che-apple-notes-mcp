@@ -22,8 +22,7 @@ enum NoteProtobufDecoder {
     static func decode(_ blob: Data) throws -> (text: String, html: String) {
         let inflated = try gunzip(blob)
         let text = extractLongestString(inflated) ?? ""
-        let html = textToHTML(text)
-        return (text, html)
+        return (text, BodyHTMLRenderer.plaintextToHTML(text))
     }
 
     // MARK: - Gzip
@@ -62,12 +61,9 @@ enum NoteProtobufDecoder {
                 COMPRESSION_ZLIB
             )
             guard written > 0 else { return nil }
-            // ZLIB decoder expects raw deflate, but gzip has a 10-byte header + 8-byte trailer.
-            // If the result is 0, try skipping the gzip header manually.
-            if written == 0 {
-                return tryRawDeflate(data, destSize: destSize)
-            }
             return Data(bytes: dst, count: written)
+        // ZLIB decoder expects raw deflate, but gzip has a header + trailer:
+        // on failure, retry with the gzip framing stripped.
         } ?? tryRawDeflate(data, destSize: destSize)
     }
 
@@ -212,17 +208,5 @@ enum NoteProtobufDecoder {
         let total = printable + control
         guard total > 0 else { return false }
         return Double(printable) / Double(total) >= 0.7
-    }
-
-    // MARK: - HTML wrapping
-
-    private static func textToHTML(_ text: String) -> String {
-        if text.isEmpty { return "" }
-        let escaped = text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\n", with: "<br>")
-        return "<div>\(escaped)</div>"
     }
 }

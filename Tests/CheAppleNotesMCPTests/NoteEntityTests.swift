@@ -59,9 +59,4 @@ import Testing
         let n = makeNote(shared: true)
         #expect(n.shared)
     }
-
-    @Test func attachmentDefaultsLocalPathNil() {
-        let a = Attachment(pk: 1, identifier: "att", filename: "x.png", typeUTI: "public.png", parentNotePK: 7)
-        #expect(a.localPath == nil)
-    }
 }
