@@ -133,11 +133,17 @@ import Testing
         }
     }
 
-    @Test func deleteNoteThenImmediateGetNoteReturnsNotFound() async throws {
+    @Test func deleteNoteThenImmediateGetNoteShowsRecentlyDeleted() async throws {
         // Read-repair acceptance for
         // [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)
-        // (ADR 0002): a just-deleted id must report not-found via the live
-        // AppleScript read, not serve the stale SQLite row.
+        // (ADR 0002). Notes soft-deletes: `delete note` moves the note to
+        // Recently Deleted and AppleScript still resolves its id there, so
+        // not-found is unachievable via the live path (and post-flush SQLite
+        // filters ZMARKEDFORDELETION, falling through to the same AppleScript
+        // read). The contract is therefore: the live read must show the note
+        // out of its original folder immediately, not serve the stale SQLite
+        // row that still places it there. Folder equality with the localized
+        // "Recently Deleted" name is deliberately not asserted.
         try await withFixtureFolder { client, fixture in
             let createResult = try await client.callTool(
                 name: "create_note",
@@ -152,13 +158,18 @@ import Testing
             )
             #expect(!delete.isError)
 
-            // Deliberately no settle sleep: the deleted id must not be
-            // readable even while the SQLite store still holds its row.
+            // Deliberately no settle sleep: while the SQLite store still
+            // holds the pre-delete row, the read must come from AppleScript
+            // and reflect the delete.
             let get = try await client.callTool(
                 name: "get_note",
                 arguments: #"{"id":"\#(created.id)"}"#
             )
-            #expect(get.isError)
+            #expect(!get.isError)
+            struct Fetched: Decodable { let folder: String; let source: String }
+            let fetched = try JSONDecoder().decode(Fetched.self, from: Data(get.text.utf8))
+            #expect(fetched.source == "applescript")
+            #expect(fetched.folder != fixture.name)
         }
     }
 
