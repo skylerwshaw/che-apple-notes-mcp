@@ -305,10 +305,18 @@ final class NotesStoreReader {
         return notes
     }
 
+    /// Look up a note by either identifier form: the bare ZIDENTIFIER UUID or
+    /// the canonical `x-coredata://<store-uuid>/ICNote/p<pk>` URI (ADR 0001),
+    /// which is what every tool hands clients and what they hand back. Comparing
+    /// against `appleScriptID` rather than an extracted pk keeps the store host
+    /// and entity segment part of the match, so a folder id never resolves to
+    /// the note sharing its pk.
     func getNote(identifier: String, includeBody: Bool = true) throws -> Note? {
         var options = NoteListOptions()
         options.includeBody = includeBody
-        var notes = try listNotes(options: options).filter { $0.identifier == identifier }
+        let notes = try listNotes(options: options).filter {
+            $0.identifier == identifier || $0.appleScriptID == identifier
+        }
         return notes.first.map { n in
             var copy = n
             if includeBody && copy.bodyText == nil && !copy.isPasswordProtected {

@@ -95,4 +95,42 @@ import Testing
             #expect(unshared.contains { $0.pk == 10 })
         }
     }
+
+    // MARK: - getNote identifier forms
+
+    private func canonicalNoteID(pk: Int64) -> String {
+        "x-coredata://\(FixtureStore.storeUUID)/ICNote/p\(pk)"
+    }
+
+    // Every `id` the tools hand back is the canonical x-coredata:// form
+    // (ADR 0001), so getNote must accept it. Server's undo capture in
+    // update/delete/move feeds it exactly that ([#7](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/7)).
+    @Test func getNoteMatchesCanonicalID() throws {
+        let note = try withFixtureReader {
+            try $0.getNote(identifier: canonicalNoteID(pk: 200))
+        }
+        #expect(note?.pk == 200)
+        #expect(note?.title == "Root A Note")
+    }
+
+    @Test func getNoteStillMatchesBareIdentifier() throws {
+        let note = try withFixtureReader { try $0.getNote(identifier: "note-uuid-200") }
+        #expect(note?.pk == 200)
+    }
+
+    @Test func getNoteReturnsNilForUnknownID() throws {
+        let note = try withFixtureReader {
+            try $0.getNote(identifier: canonicalNoteID(pk: 999999))
+        }
+        #expect(note == nil)
+    }
+
+    // A folder's canonical id must not resolve to the note sharing that pk.
+    // Matching on the extracted pk alone would ignore the entity segment.
+    @Test func getNoteRejectsFolderCanonicalIDWithSamePK() throws {
+        let note = try withFixtureReader {
+            try $0.getNote(identifier: "x-coredata://\(FixtureStore.storeUUID)/ICFolder/p200")
+        }
+        #expect(note == nil)
+    }
 }

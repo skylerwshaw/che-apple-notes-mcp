@@ -537,14 +537,31 @@ final class CheAppleNotesMCPServer {
         let allFolders = try sqlite.listFolders()
         let byPK = Dictionary(uniqueKeysWithValues: allFolders.map { ($0.pk, $0) })
 
+        // Resolve folder_id to a real folder once, for both branches below.
+        // Without this a malformed, stale, or wrong-entity id reaches the SQL
+        // filter and matches zero notes, which reads as "empty folder" instead
+        // of "invalid folder_id". Both accepted forms are matched whole
+        // (canonical ID against `appleScriptID`, UUID against `identifier`),
+        // so the store host and entity segment stay part of the match and an
+        // ICNote id can't resolve to the folder sharing its pk.
+        var folderIDRoot: Folder? = nil
+        if let folderID = options.folderIdentifier {
+            guard let match = allFolders.first(where: {
+                $0.appleScriptID == folderID || $0.identifier == folderID
+            }) else {
+                throw NotesServerError.invalidArgument(
+                    "folder_id '\(folderID)' does not match a known folder"
+                )
+            }
+            folderIDRoot = match
+        }
+
         if recursive {
-            // byPK[rootPK] != nil rejects a well-formed-looking but unknown
-            // id (wrong entity, stale/deleted folder) — without it the pk
-            // still reaches the SQL filter and just matches zero notes,
-            // which reads as "empty folder" instead of "invalid folder_id".
-            guard let folderID = options.folderIdentifier,
-                  let rootPK = NotesStoreReader.extractCoreDataPK(folderID),
-                  byPK[rootPK] != nil
+            // A UUID or a folder name can't be expanded to a subtree, so
+            // recursion needs the canonical ID specifically; the guard above
+            // has already rejected an unknown one of either form.
+            guard options.folderIdentifier?.hasPrefix("x-coredata://") == true,
+                  let rootPK = folderIDRoot?.pk
             else {
                 throw NotesServerError.invalidArgument(
                     "list_notes recursive requires folder_id as a canonical id (x-coredata://... form from list_folders output) matching a known folder, not a folder name"
@@ -615,8 +632,11 @@ final class CheAppleNotesMCPServer {
         let id = try requireString(args, "id")
         if let sqlite, let note = try sqlite.getNote(identifier: id) {
             var dict = noteToDict(note)
-            // If body decode failed, fill via AppleScript
-            if note.bodyDecodeError {
+            // Fill the body via AppleScript whenever SQLite couldn't produce
+            // one: decode failure, a locked note, or a row with no body blob.
+            // The last two leave `bodyDecodeError` false, so keying the
+            // fallback off that flag alone silently returns an empty body.
+            if note.bodyDecodeError || dict["body_text"] == nil {
                 if let html = try? applescript.getNoteBody(id: id) {
                     dict["body_html"] = html
                     dict["body_text"] = BodyHTMLRenderer.htmlToPlaintext(html)

@@ -61,6 +61,58 @@ import MCP
         #expect(rows.map { $0.title } == ["Root A Note"])
     }
 
+    @Test func nonRecursiveWithUnknownFolderPKThrowsInvalidArgument() async throws {
+        // Same failure mode the recursive branch already guarded, on the
+        // non-recursive path: a canonical folder_id whose pk is not a real
+        // folder reached the SQL filter and matched zero notes, reading as
+        // "empty folder"
+        // ([#7](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/7)).
+        do {
+            _ = try await listNotes(["folder_id": .string(canonicalFolderID(pk: 999999))])
+            Issue.record("expected invalidArgument throw but got success")
+        } catch let error as NotesServerError {
+            guard case .invalidArgument = error else {
+                Issue.record("expected invalidArgument but got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test func staleUUIDFolderIDThrowsInvalidArgument() async throws {
+        // The UUID form is accepted for folder_id too, so a stale one has the
+        // same silent-empty-list failure mode as a stale canonical ID.
+        do {
+            _ = try await listNotes(["folder_id": .string("folder-uuid-999999")])
+            Issue.record("expected invalidArgument throw but got success")
+        } catch let error as NotesServerError {
+            guard case .invalidArgument = error else {
+                Issue.record("expected invalidArgument but got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test func validUUIDFolderIDStillFiltersAsBefore() async throws {
+        let rows = try await listNotes(["folder_id": .string("folder-uuid-10")])
+        #expect(rows.map { $0.title } == ["Root A Note"])
+    }
+
+    @Test func folderIDCarryingTheNoteEntityIsRejected() async throws {
+        // The entity segment is part of the identity: an ICNote id must not
+        // resolve to the folder that happens to share its pk.
+        do {
+            _ = try await listNotes([
+                "folder_id": .string("x-coredata://\(FixtureStore.storeUUID)/ICNote/p10")
+            ])
+            Issue.record("expected invalidArgument throw but got success")
+        } catch let error as NotesServerError {
+            guard case .invalidArgument = error else {
+                Issue.record("expected invalidArgument but got \(error)")
+                return
+            }
+        }
+    }
+
     // MARK: - folder_path
 
     @Test func everyRowCarriesFolderPath() async throws {
@@ -116,9 +168,11 @@ import MCP
     }
 
     @Test func recursiveWithUnknownFolderPKThrowsInvalidArgument() async throws {
-        // Well-formed x-coredata:// id whose pk isn't a real folder (wrong
-        // entity, stale/deleted folder) must error, not silently match zero
-        // notes and look like "this folder is empty".
+        // Well-formed x-coredata:// id whose pk isn't a real folder (stale or
+        // deleted) must error, not silently match zero notes and look like
+        // "this folder is empty". Now rejected by the shared folder_id guard
+        // rather than the recursive branch itself; pinned here as behavior of
+        // the recursive call regardless of which guard catches it.
         do {
             _ = try await listNotes([
                 "folder_id": .string(canonicalFolderID(pk: 999999)),
