@@ -81,14 +81,6 @@ final class NotesStoreReader {
         return id
     }
 
-    // MARK: - Checkpoint
-
-    /// Force a passive WAL checkpoint. Call after AppleScript writes to pick up
-    /// latest changes without waiting for Notes.app's idle flush.
-    func checkpoint() {
-        sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_PASSIVE, nil, nil)
-    }
-
     // MARK: - Accounts
 
     func listAccounts() throws -> [Account] {
