@@ -465,7 +465,6 @@ final class CheAppleNotesMCPServer {
         let title = try requireString(args, "title")
         let account = args["account"]?.stringValue
         let id = try applescript.createFolder(title: title, account: account)
-        sqlite?.checkpoint()
         return jsonify(["id": id, "title": title, "account": account ?? ""])
     }
 
@@ -473,14 +472,12 @@ final class CheAppleNotesMCPServer {
         let id = try requireString(args, "id")
         let title = try requireString(args, "title")
         _ = try applescript.renameFolder(id: id, newTitle: title)
-        sqlite?.checkpoint()
         return jsonify(["id": id, "title": title])
     }
 
     private func handleDeleteFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
         try applescript.deleteFolder(id: id)
-        sqlite?.checkpoint()
         return jsonify(["id": id, "deleted": true])
     }
 
@@ -673,7 +670,6 @@ final class CheAppleNotesMCPServer {
 
         let id = try applescript.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
         undoStack.record(.create(id: id))
-        sqlite?.checkpoint()
         return jsonify([
             "id": id, "title": title, "folder": folder ?? "", "account": account ?? ""
         ] as [String: Any])
@@ -705,7 +701,6 @@ final class CheAppleNotesMCPServer {
             oldTitle: oldTitle, oldBodyHTML: oldBodyHTML,
             newTitle: newTitle, newBodyHTML: newBodyHTML
         ))
-        sqlite?.checkpoint()
         return jsonify(["id": id, "updated": true])
     }
 
@@ -729,7 +724,6 @@ final class CheAppleNotesMCPServer {
             id: id, title: capturedTitle, bodyHTML: capturedBodyHTML,
             folder: capturedFolder, account: capturedAccount
         ))
-        sqlite?.checkpoint()
         return jsonify(["id": id, "deleted": true])
     }
 
@@ -745,7 +739,6 @@ final class CheAppleNotesMCPServer {
 
         _ = try applescript.moveNote(id: id, toFolderName: folder, account: account)
         undoStack.record(.move(id: id, fromFolder: fromFolder, account: account, toFolder: folder))
-        sqlite?.checkpoint()
         return jsonify(["id": id, "moved_to": folder])
     }
 
@@ -856,7 +849,6 @@ final class CheAppleNotesMCPServer {
         }
         let ids = try applescript.createNotesBatch(entries)
         for id in ids { undoStack.record(.create(id: id)) }
-        sqlite?.checkpoint()
         return jsonify(["ids": ids, "count": ids.count] as [String: Any])
     }
 
@@ -869,7 +861,6 @@ final class CheAppleNotesMCPServer {
         let account = args["account"]?.stringValue
 
         try applescript.moveNotesBatch(ids, toFolderName: folder, account: account)
-        sqlite?.checkpoint()
         return jsonify(["moved_count": ids.count, "destination": folder] as [String: Any])
     }
 
@@ -879,7 +870,6 @@ final class CheAppleNotesMCPServer {
         }
         let ids = idsArr.compactMap { $0.stringValue }
         try applescript.deleteNotesBatch(ids)
-        sqlite?.checkpoint()
         return jsonify(["deleted_count": ids.count] as [String: Any])
     }
 
@@ -899,7 +889,6 @@ final class CheAppleNotesMCPServer {
         case .move(let id, let fromFolder, let account, _):
             _ = try applescript.moveNote(id: id, toFolderName: fromFolder, account: account)
         }
-        sqlite?.checkpoint()
         return jsonify(["undone": true, "operation": op.humanDescription] as [String: Any])
     }
 
@@ -918,7 +907,6 @@ final class CheAppleNotesMCPServer {
         case .move(let id, _, let account, let toFolder):
             _ = try applescript.moveNote(id: id, toFolderName: toFolder, account: account)
         }
-        sqlite?.checkpoint()
         return jsonify(["redone": true, "operation": op.humanDescription] as [String: Any])
     }
 

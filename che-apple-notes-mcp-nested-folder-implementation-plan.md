@@ -921,13 +921,7 @@ Return normalized object:
 }
 ```
 
-After AppleScript write:
-
-```swift
-sqlite?.checkpoint()
-```
-
-and re-read the folder if practical to ensure canonical metadata rather than trusting only the AppleScript return value.
+After the AppleScript write, re-read the folder if practical to ensure canonical metadata rather than trusting only the AppleScript return value. (An earlier revision of this plan called `sqlite?.checkpoint()` here; that method was a no-op and was deleted per [#12](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/12). Read-after-write freshness is handled per `docs/adr/0002-read-repair-for-read-after-write.md`.)
 
 ## Tests
 
