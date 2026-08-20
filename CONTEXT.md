@@ -1,6 +1,6 @@
 # Apple Notes MCP
 
-An MCP server that exposes Apple Notes to agents: reads go directly against the Notes SQLite store (read-only), writes go through Notes.app via AppleScript.
+An MCP server that exposes Apple Notes to agents: reads go directly against the Notes SQLite store (read-only), writes go through Notes.app via AppleScript. Reads are eventually consistent (Notes.app flushes to SQLite lazily; a rename was measured taking 4-8s to surface), except that `get_note` reads live via AppleScript for ids this server recently wrote, so read-after-write of the server's own writes is consistent (see ADR 0002).
 
 ## Language
 
