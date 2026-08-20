@@ -49,6 +49,11 @@ actor MCPClient {
     private var stdoutBuffer = Data()
     private let responseTimeout: TimeInterval
     private var closed = false
+    /// Replies read off the wire whose id belongs to another in-flight
+    /// request. A shared client (see TestFixture's SharedServer) can have
+    /// several requests awaiting concurrently; whichever waiter reads a line
+    /// parks non-matching replies here instead of dropping them.
+    private var parkedResponses: [Int: [String: Any]] = [:]
 
     // MARK: - Init
 
@@ -57,9 +62,14 @@ actor MCPClient {
     ///   - binaryPath: absolute path to the built binary. Defaults to
     ///     `$PWD/.build/debug/CheAppleNotesMCP`.
     ///   - responseTimeout: how long a single request waits for its reply.
+    ///     The 60s default still bounds a genuine hang (the point of
+    ///     [#13](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/13)) while clearing the ~30s Automation/TCC evaluation a
+    ///     fresh server process pays on its first Apple Event
+    ///     ([#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)) — a 30s deadline sat exactly on top of that cost, so
+    ///     every first call was a photo-finish coin flip.
     init(
         binaryPath: String = MCPClient.defaultBinaryPath,
-        responseTimeout: TimeInterval = 30
+        responseTimeout: TimeInterval = 60
     ) throws {
         let proc = Process()
         let stdinPipe = Pipe()
@@ -187,6 +197,9 @@ actor MCPClient {
     private func waitForResponse(id: Int) async throws -> String {
         let deadline = Date().addingTimeInterval(responseTimeout)
         while Date() < deadline {
+            if let parked = parkedResponses.removeValue(forKey: id) {
+                return try unpackResponse(parked)
+            }
             guard let line = try readLine() else {
                 try await Task.sleep(nanoseconds: 5_000_000)  // 5 ms
                 continue
@@ -197,24 +210,31 @@ actor MCPClient {
             guard let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
                 continue  // ignore malformed
             }
-            guard let responseId = json["id"] as? Int, responseId == id else {
-                continue  // unrelated message
+            guard let responseId = json["id"] as? Int else {
+                continue  // notification or malformed — not a reply
+            }
+            guard responseId == id else {
+                parkedResponses[responseId] = json  // another waiter's reply
+                continue
             }
 
-            if let error = json["error"] as? [String: Any] {
-                let code = error["code"] as? Int ?? -1
-                let message = error["message"] as? String ?? "unknown"
-                throw MCPError.serverError(code: code, message: message)
-            }
-
-            // Re-serialize just the `result` field so callers can re-parse.
-            guard let result = json["result"] else {
-                throw MCPError.protocolError("response missing result and error")
-            }
-            let resultData = try JSONSerialization.data(withJSONObject: result)
-            return String(data: resultData, encoding: .utf8) ?? "{}"
+            return try unpackResponse(json)
         }
         throw MCPError.responseTimeout
+    }
+
+    private func unpackResponse(_ json: [String: Any]) throws -> String {
+        if let error = json["error"] as? [String: Any] {
+            let code = error["code"] as? Int ?? -1
+            let message = error["message"] as? String ?? "unknown"
+            throw MCPError.serverError(code: code, message: message)
+        }
+        // Re-serialize just the `result` field so callers can re-parse.
+        guard let result = json["result"] else {
+            throw MCPError.protocolError("response missing result and error")
+        }
+        let resultData = try JSONSerialization.data(withJSONObject: result)
+        return String(data: resultData, encoding: .utf8) ?? "{}"
     }
 
     /// Read one newline-terminated JSON line from stdout. Returns nil if none is

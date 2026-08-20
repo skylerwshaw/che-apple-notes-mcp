@@ -30,7 +30,7 @@ final class NotesController: @unchecked Sendable {
     // MARK: - Run
 
     /// Apple Event reply timeout applied to every script this controller runs.
-    /// Must stay safely under the smallest client response deadline (30s in
+    /// Must stay safely under the smallest client response deadline (60s in
     /// the E2E MCPClient) so a stalled Apple Event surfaces as an error the
     /// caller can act on instead of silently blowing the caller's deadline
     /// (issue [#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)). Scripts with their own `with timeout` blocks (the share

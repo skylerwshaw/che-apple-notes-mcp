@@ -19,8 +19,9 @@ import Testing
     }
 
     @Test func timeoutStaysSafelyUnderTheClientResponseDeadline() {
-        // The E2E MCPClient's responseTimeout is 30s; a bounded Apple Event
-        // must surface its result well before the client gives up.
+        // The E2E MCPClient's responseTimeout is 60s; the pin stays at the
+        // stricter half of that so a bounded Apple Event surfaces its result
+        // well before any client gives up.
         #expect(NotesController.appleEventTimeoutSeconds > 0)
         #expect(NotesController.appleEventTimeoutSeconds < 30)
     }

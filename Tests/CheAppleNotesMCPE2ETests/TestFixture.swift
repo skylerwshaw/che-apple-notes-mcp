@@ -30,10 +30,36 @@ func settleForNotesFlush() async throws {
     try await Task.sleep(nanoseconds: 500_000_000)
 }
 
+/// One server process shared by every fixture-based E2E test. A fresh server
+/// process pays a ~30s Automation/TCC evaluation on its first Apple Event
+/// ([#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)); when each test spawned its own process, every test paid
+/// that tax and raced the client's response deadline. One shared process
+/// pays it once per test run, and every later call completes in
+/// milliseconds. The child process is reaped when the test runner exits
+/// (its stdin reaches EOF); tests must not call `close()` on it.
+///
+/// Tests that need a private process (transport tests, stub servers) keep
+/// constructing `MCPClient` directly.
+private actor SharedServer {
+    static let instance = SharedServer()
+    private var client: MCPClient?
+
+    func get() async throws -> MCPClient {
+        if let client { return client }
+        let fresh = try MCPClient()
+        _ = try await fresh.initialize()
+        client = fresh
+        return fresh
+    }
+}
+
 /// Run `body` inside a freshly created test fixture folder. The folder is
 /// named `__CheMCPTest_{UUID}__` so bulk cleanup scripts can recognize it.
 /// The folder and all notes inside it are deleted on teardown even if the
 /// body throws.
+///
+/// The client passed to `body` is the shared server process (see
+/// `SharedServer`); the fixture folder is still private to this call.
 ///
 /// Account resolution: prefers `On My Mac` (no iCloud sync lag) when
 /// available, otherwise falls back to the server's default account. The
@@ -41,13 +67,11 @@ func settleForNotesFlush() async throws {
 func withFixtureFolder(
     _ body: (MCPClient, FixtureFolder) async throws -> Void
 ) async throws {
-    let client = try MCPClient()
-    _ = try await client.initialize()
+    let client = try await SharedServer.instance.get()
 
     let folderName = "__CheMCPTest_\(UUID().uuidString.uppercased())__"
     let resolvedAccount = try await createFixtureFolder(client: client, folderName: folderName)
     guard let (folderId, account) = resolvedAccount else {
-        await client.close()
         throw FixtureError.setupFailed("create_folder failed on both On My Mac and default account")
     }
 
@@ -67,7 +91,6 @@ func withFixtureFolder(
     }
 
     await teardownBestEffort(client: client, fixture: fixture)
-    await client.close()
 
     if let bodyError { throw bodyError }
 }
