@@ -28,6 +28,9 @@ import Testing
         "undo",
         "redo",
         "undo_history",
+        "get_share_metadata",
+        "prepare_share_note",
+        "prepare_share_folder",
     ]
 
     @Test func serverAdvertisesExactlyTheExpectedTools() async throws {

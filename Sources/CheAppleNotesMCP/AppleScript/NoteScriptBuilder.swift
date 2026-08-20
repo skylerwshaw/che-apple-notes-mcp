@@ -159,8 +159,13 @@ enum NoteScriptBuilder {
     /// The script layers three try/on-error blocks so each failure mode
     /// surfaces with a distinct message matching the spec scenarios:
     /// - Activate timeout → "Notes.app did not activate"
-    /// - `show note` fails → bubbles the AS error (likely unknown id)
-    /// - Menu item missing → "share menu unavailable"
+    /// - `show note` fails → bubbles the AS error (likely unknown id, or a
+    ///   timeout if Notes is busy)
+    /// - Menu item missing (or the click itself timing out) → "share menu
+    ///   unavailable"
+    ///
+    /// Every Apple Event in this script runs inside a `with timeout` block —
+    /// none of the three steps can hang indefinitely.
     static func prepareShareNote(id: String) -> String {
         let idLit = AppleScriptEscape.quote(id)
         return """
@@ -171,22 +176,26 @@ enum NoteScriptBuilder {
                 error "Notes.app did not activate"
             end try
         end timeout
-        tell application "Notes"
-            show note id \(idLit)
-        end tell
-        tell application "System Events"
-            tell process "Notes"
-                try
-                    click menu item "Share Note..." of menu "File" of menu bar 1
-                on error
-                    try
-                        click menu item "Share Note…" of menu "File" of menu bar 1
-                    on error
-                        error "share menu unavailable"
-                    end try
-                end try
+        with timeout of 5 seconds
+            tell application "Notes"
+                show note id \(idLit)
             end tell
-        end tell
+        end timeout
+        with timeout of 15 seconds
+            tell application "System Events"
+                tell process "Notes"
+                    try
+                        click menu item "Share Note..." of menu "File" of menu bar 1
+                    on error
+                        try
+                            click menu item "Share Note…" of menu "File" of menu bar 1
+                        on error
+                            error "share menu unavailable"
+                        end try
+                    end try
+                end tell
+            end tell
+        end timeout
         return "prepared"
         """
     }
@@ -204,26 +213,30 @@ enum NoteScriptBuilder {
                 error "Notes.app did not activate"
             end try
         end timeout
-        tell application "Notes"
-            try
-                show folder id \(idLit)
-            on error
-                error "folder not found"
-            end try
-        end tell
-        tell application "System Events"
-            tell process "Notes"
+        with timeout of 5 seconds
+            tell application "Notes"
                 try
-                    click menu item "Share Folder..." of menu "File" of menu bar 1
+                    show folder id \(idLit)
                 on error
-                    try
-                        click menu item "Share Folder…" of menu "File" of menu bar 1
-                    on error
-                        error "share menu unavailable"
-                    end try
+                    error "folder not found"
                 end try
             end tell
-        end tell
+        end timeout
+        with timeout of 15 seconds
+            tell application "System Events"
+                tell process "Notes"
+                    try
+                        click menu item "Share Folder..." of menu "File" of menu bar 1
+                    on error
+                        try
+                            click menu item "Share Folder…" of menu "File" of menu bar 1
+                        on error
+                            error "share menu unavailable"
+                        end try
+                    end try
+                end tell
+            end tell
+        end timeout
         return "prepared"
         """
     }
