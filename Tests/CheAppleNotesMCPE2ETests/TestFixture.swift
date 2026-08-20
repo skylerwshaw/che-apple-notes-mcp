@@ -72,17 +72,26 @@ func withFixtureFolder(
     if let bodyError { throw bodyError }
 }
 
-/// Try to create the fixture folder under `On My Mac`; if that account
-/// doesn't exist on the host, retry with the server's default account.
+/// Try to create the fixture folder under `On My Mac`; if that account isn't
+/// present on the host, go straight to the server's default account.
 /// Returns `(folderId, resolvedAccountName?)` or nil if both attempts fail.
-private func createFixtureFolder(client: MCPClient, folderName: String) async throws -> (String, String?)? {
-    // First attempt: prefer On My Mac when present.
-    let preferredArgs = #"{"title":"\#(folderName)","account":"On My Mac"}"#
-    let preferred = try await client.callTool(name: "create_folder", arguments: preferredArgs)
-    if !preferred.isError,
-       let id = try? parseFolderId(from: preferred.text), !id.isEmpty
-    {
-        return (id, "On My Mac")
+///
+/// `On My Mac` is checked via `list_folders` first rather than attempted
+/// blind: a `create_folder` against a nonexistent account round-trips
+/// through a failing Apple Event, which can take ~30s to error out, well
+/// past the client's response timeout (see issue #15). `list_folders` costs
+/// milliseconds (SQLite-backed) or at worst a fast AppleScript listing, and
+/// a false negative (account present but empty) is safe: the fixture just
+/// falls back to the default account.
+func createFixtureFolder(client: MCPClient, folderName: String) async throws -> (String, String?)? {
+    if await accountExists(client: client, named: "On My Mac") {
+        let preferredArgs = #"{"title":"\#(folderName)","account":"On My Mac"}"#
+        let preferred = try await client.callTool(name: "create_folder", arguments: preferredArgs)
+        if !preferred.isError,
+           let id = try? parseFolderId(from: preferred.text), !id.isEmpty
+        {
+            return (id, "On My Mac")
+        }
     }
     // Fallback: let the server pick the default account.
     let fallbackArgs = #"{"title":"\#(folderName)"}"#
@@ -93,6 +102,21 @@ private func createFixtureFolder(client: MCPClient, folderName: String) async th
         return (id, nil)
     }
     return nil
+}
+
+private struct FolderAccountDTO: Decodable { let account_name: String? }
+
+/// Whether `list_folders` reports any folder under `accountName`. Any
+/// failure (server error, malformed JSON) is treated as absent, since the
+/// caller's fallback path is safe either way.
+private func accountExists(client: MCPClient, named accountName: String) async -> Bool {
+    guard let result = try? await client.callTool(name: "list_folders"), !result.isError else {
+        return false
+    }
+    guard let folders = try? JSONDecoder().decode([FolderAccountDTO].self, from: Data(result.text.utf8)) else {
+        return false
+    }
+    return folders.contains { $0.account_name == accountName }
 }
 
 /// Delete every note in the fixture folder, then the folder itself.
