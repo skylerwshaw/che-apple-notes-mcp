@@ -13,6 +13,6 @@ Reads come from the Notes SQLite store, which Notes.app flushes lazily (a rename
 ## Consequences
 
 - Read-after-write consistency holds only for writes made through this server instance. Edits from other devices or apps still lag until Core Data flushes; that is inherent to reading a store another process owns.
-- `get_note` on a just-deleted id reports not-found (the AppleScript path errors) instead of serving the stale SQLite row.
+- `get_note` on a just-deleted id reflects the delete immediately instead of serving the stale SQLite row. Verified empirically: Notes soft-deletes (`delete note` moves the note to Recently Deleted, where AppleScript still resolves its id), so the live read returns the note located in Recently Deleted rather than not-found. This matches the server's steady-state behavior, since the SQLite note query filters `ZMARKEDFORDELETION` and post-flush reads fall through to the same AppleScript path.
 - A recently written id pays an AppleScript roundtrip on `get_note` until its tracking entry expires, even when the flush has already landed. The entry TTL must comfortably exceed the measured 4-8s flush lag.
 - [#12](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/12) resolves as pure deletion: nothing pretends to establish freshness anymore.
