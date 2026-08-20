@@ -47,15 +47,20 @@ actor MCPClient {
     private let stdoutHandle: FileHandle
     private var nextId: Int = 1
     private var stdoutBuffer = Data()
-    private let responseTimeout: TimeInterval = 30
+    private let responseTimeout: TimeInterval
     private var closed = false
 
     // MARK: - Init
 
     /// Spawn a new MCP server child process.
-    /// - Parameter binaryPath: absolute path to the built binary. Defaults to
-    ///   `$PWD/.build/debug/CheAppleNotesMCP`.
-    init(binaryPath: String = MCPClient.defaultBinaryPath) throws {
+    /// - Parameters:
+    ///   - binaryPath: absolute path to the built binary. Defaults to
+    ///     `$PWD/.build/debug/CheAppleNotesMCP`.
+    ///   - responseTimeout: how long a single request waits for its reply.
+    init(
+        binaryPath: String = MCPClient.defaultBinaryPath,
+        responseTimeout: TimeInterval = 30
+    ) throws {
         let proc = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -72,8 +77,15 @@ actor MCPClient {
         }
 
         self.process = proc
+        self.responseTimeout = responseTimeout
         self.stdinHandle = stdinPipe.fileHandleForWriting
         self.stdoutHandle = stdoutPipe.fileHandleForReading
+
+        // Non-blocking stdout is what makes `responseTimeout` real: a blocking
+        // read on a live-but-silent server never returns, so `waitForResponse`
+        // never gets to re-check its deadline. Only the parent's read end is
+        // affected; the child holds a separate open file description.
+        _ = fcntl(self.stdoutHandle.fileDescriptor, F_SETFL, O_NONBLOCK)
 
         // Drain stderr in background so the server doesn't block on a full pipe.
         // No isolated state mutated here, so this is safe off-actor.
@@ -206,30 +218,36 @@ actor MCPClient {
     }
 
     /// Read one newline-terminated JSON line from stdout. Returns nil if none is
-    /// available yet.
+    /// available yet, so the caller's deadline check keeps running.
     private func readLine() throws -> Data? {
-        if let idx = stdoutBuffer.firstIndex(of: 0x0A) {
-            let line = Data(stdoutBuffer[stdoutBuffer.startIndex..<idx])
-            stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...idx)
-            return line
-        }
-        // Pull anything available without blocking indefinitely.
-        // availableData blocks until at least 1 byte or EOF; if process died,
-        // we'd get empty Data which we translate to "no data yet".
-        let chunk = stdoutHandle.availableData
-        if chunk.isEmpty {
-            if !process.isRunning {
-                throw MCPError.serverExitedEarly
-            }
-            return nil
-        }
-        stdoutBuffer.append(chunk)
+        if let line = takeBufferedLine() { return line }
 
-        if let idx = stdoutBuffer.firstIndex(of: 0x0A) {
-            let line = Data(stdoutBuffer[stdoutBuffer.startIndex..<idx])
-            stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...idx)
-            return line
+        // The descriptor is O_NONBLOCK (see init), so this returns immediately.
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let count = buffer.withUnsafeMutableBytes {
+            read(stdoutHandle.fileDescriptor, $0.baseAddress, $0.count)
         }
-        return nil
+        if count < 0 {
+            // Nothing readable yet, or the read was interrupted. Either way the
+            // caller should poll again rather than treat it as an error.
+            if errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return nil }
+            throw MCPError.protocolError("read failed: \(String(cString: strerror(errno)))")
+        }
+        if count == 0 {
+            // Genuine EOF: the child's stdout write end is closed, so no
+            // response can ever arrive.
+            throw MCPError.serverExitedEarly
+        }
+        stdoutBuffer.append(contentsOf: buffer[0..<count])
+        return takeBufferedLine()
+    }
+
+    /// Pop the first complete line out of `stdoutBuffer`, if there is one.
+    /// Partial lines stay buffered so a response split across reads reassembles.
+    private func takeBufferedLine() -> Data? {
+        guard let idx = stdoutBuffer.firstIndex(of: 0x0A) else { return nil }
+        let line = Data(stdoutBuffer[stdoutBuffer.startIndex..<idx])
+        stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...idx)
+        return line
     }
 }
