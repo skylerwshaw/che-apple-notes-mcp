@@ -9,19 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **First-Apple-Event stall** ([#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)): the first Apple Event a freshly
-  spawned server process sends paid a one-off ~14-30s Automation/TCC
-  evaluation (158s for a never-before-seen ad-hoc-signed binary identity),
-  regardless of whether the call succeeded or failed. The server now pays
-  that cost with a warm-up Apple Event fired at startup (skipped when
-  Notes.app isn't running, or when `CHE_MCP_NO_AE_WARMUP` is set), so a
-  client that connects at startup and calls tools later sees its first
-  Apple Event complete in ~0.18s. Every AppleScript the server executes is
-  additionally wrapped in `with timeout of 15 seconds` so a delivered
-  Apple Event's reply wait is bounded well under a 30s client deadline
-  (measured: the wrap does not, and cannot, bound the pre-delivery TCC
-  stall). Concurrent AppleScript executions are now serialized; a timing
-  harness (`scripts/ae-timing-harness.py`) reproduces all measurements.
+- **Apple Event stalls, root-caused and fixed** ([#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)): every AppleScript
+  now executes on the main thread. NSAppleScript's reply wait pumps a
+  WaitNextEvent loop on the calling thread, but Apple Event replies are
+  delivered to the process's main event queue: executed from a background
+  thread (as every tool call was), the wait intermittently never saw its
+  reply and parked forever in an untimed `mach_msg`. Stack-sampled live
+  mid-stall while an independent `osascript` got answers from Notes in
+  0.17s. This one bug was behind the ~30s first-call delays, the historic
+  multi-minute stalls (8-12 min observed), and the gap between the server
+  (30s+) and `osascript` (0.18s) running identical scripts. After the fix,
+  1200 consecutive Apple Events measured max 1.05s / mean 63ms, first
+  calls included; the previous build wedged within 25. Every script is
+  also wrapped in `with timeout of 15 seconds`, which only reliably fires
+  on the main thread for the same reason. A timing harness
+  (`scripts/ae-timing-harness.py`) reproduces all measurements and
+  captures stack samples on any future wedge.
 
 ### Added
 

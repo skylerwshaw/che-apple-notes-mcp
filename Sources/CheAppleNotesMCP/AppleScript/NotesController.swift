@@ -6,12 +6,12 @@ import Foundation
 /// All write operations go through here. Read fallbacks (when FDA is not
 /// granted) also use this class.
 ///
-/// `@unchecked Sendable`: the only mutable state is OSA's shared component
-/// state inside NSAppleScript, which `executionLock` serializes (concurrent
-/// executions in one process can otherwise cross their results).
+/// `@unchecked Sendable`: the class holds no state of its own, and every
+/// execution funnels through the main thread (see `run(_:)`), which both
+/// serializes NSAppleScript's shared OSA component state (concurrent
+/// executions were observed crossing their results) and keeps the Apple
+/// Event reply wait on the thread whose event queue receives the reply.
 final class NotesController: @unchecked Sendable {
-
-    private let executionLock = NSLock()
 
     enum ControllerError: LocalizedError {
         case executionFailed(number: Int, message: String)
@@ -37,12 +37,10 @@ final class NotesController: @unchecked Sendable {
     /// preparation flow) keep them: an inner block overrides this outer one
     /// for its scope.
     ///
-    /// Measured limitation (scripts/ae-timing-harness.py): this bounds only
-    /// the reply wait for a delivered event. The one-off ~14-30s (up to 158s
-    /// on a fresh rebuild) Automation/TCC stall on a process's first Apple
-    /// Event happens before delivery, sails straight past this block, and
-    /// then returns the call's real result rather than error -1712. That
-    /// cost is handled by the startup warm-up in Server.run() instead.
+    /// This bounds the reply wait for a delivered event. It is only
+    /// meaningful because `run(_:)` executes on the main thread: waited off
+    /// the main thread, the deadline check lives in an event loop that may
+    /// never wake (see `run(_:)`), and -1712 can silently never fire.
     static let appleEventTimeoutSeconds = 15
 
     /// Wrap `source` so each Apple Event it sends waits at most
@@ -56,11 +54,31 @@ final class NotesController: @unchecked Sendable {
         """
     }
 
+    /// Executes on the main thread, always. NSAppleScript's reply wait uses
+    /// the legacy WaitNextEvent active proc, and Apple Event replies are
+    /// delivered to the process's main event queue: a wait pumped on any
+    /// other thread intermittently never sees its reply and parks forever in
+    /// an untimed mach_msg (which is also why `with timeout`'s -1712 cannot
+    /// fire there — the deadline check lives in a loop that never wakes).
+    /// Stack-sampled live in issue [#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16): UASRemoteSend →
+    /// AEDefaultActiveProc → WaitNextEvent on a cooperative-pool thread,
+    /// while an independent osascript got answers from Notes in 0.17s.
+    /// osascript runs scripts on its main thread and has never exhibited
+    /// this repo's multi-minute stalls; this hop is the same discipline.
     @discardableResult
     func run(_ source: String) throws -> NSAppleEventDescriptor {
-        executionLock.lock()
-        defer { executionLock.unlock() }
-        guard let script = NSAppleScript(source: Self.timeoutWrapped(source)) else {
+        if Thread.isMainThread {
+            return try Self.executeOnCurrentThread(source)
+        }
+        var outcome: Result<NSAppleEventDescriptor, Error>?
+        DispatchQueue.main.sync {
+            outcome = Result { try Self.executeOnCurrentThread(source) }
+        }
+        return try outcome!.get()
+    }
+
+    private static func executeOnCurrentThread(_ source: String) throws -> NSAppleEventDescriptor {
+        guard let script = NSAppleScript(source: timeoutWrapped(source)) else {
             throw ControllerError.unexpectedResult("failed to compile AppleScript")
         }
         var error: NSDictionary?

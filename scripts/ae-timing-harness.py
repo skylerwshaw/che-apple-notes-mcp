@@ -14,10 +14,7 @@ Two scenarios, each in its own freshly spawned server process:
 Event), so it should always be fast regardless of the Apple Event behavior.
 
 Usage:
-  python3 scripts/ae-timing-harness.py [--binary PATH] [--repeat N] [--no-warmup]
-
---no-warmup sets CHE_MCP_NO_AE_WARMUP=1 so the server skips its startup
-warm-up Apple Event, exposing the raw first-call cost.
+  python3 scripts/ae-timing-harness.py [--binary PATH] [--repeat N] [--cycles N]
 
 Notes.app must be reachable (run outside any sandbox that blocks Apple
 Events). Leftover fixture folders match __CheMCPTest_* and can be cleaned
@@ -26,7 +23,6 @@ with scripts/cleanup-test-folders.sh.
 
 import argparse
 import json
-import os
 import queue
 import subprocess
 import sys
@@ -39,14 +35,12 @@ BOGUS_FOLDER_ID = "x-coredata://00000000-0000-0000-0000-000000000000/ICFolder/p9
 class Server:
     """One spawned server process speaking newline-delimited JSON-RPC."""
 
-    def __init__(self, binary, extra_env):
-        env = dict(os.environ, **extra_env)
+    def __init__(self, binary):
         self.proc = subprocess.Popen(
             [binary],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            env=env,
             text=True,
         )
         self.lines = queue.Queue()
@@ -118,17 +112,15 @@ class Server:
             self.proc.kill()
 
 
-def run_scenario(name, binary, calls, timeout, extra_env, settle):
+def run_scenario(name, binary, calls, timeout):
     """calls: list of (label, tool, arguments-or-callable, expected_ok)."""
-    server = Server(binary, extra_env)
+    server = Server(binary)
     rows = []
     state = {}
     try:
         start = time.monotonic()
         server.initialize(timeout)
         rows.append((name, "initialize", "-", True, True, time.monotonic() - start))
-        if settle:
-            time.sleep(settle)  # let the server's startup warm-up finish first
         for label, tool, arguments, expected_ok in calls:
             if callable(arguments):
                 try:
@@ -151,20 +143,80 @@ def run_scenario(name, binary, calls, timeout, extra_env, settle):
     return rows
 
 
+def run_cycles(binary, cycles, timeout):
+    """One long-lived server process running create/rename/list/delete folder
+    cycles, mimicking a shared-server E2E suite. Prints the server pid so a
+    wedged process can be sampled (`sample <pid> 5`) while stuck."""
+    server = Server(binary)
+    print(f"server pid: {server.proc.pid}", flush=True)
+    rows = []
+    start = time.monotonic()
+    server.initialize(timeout)
+    rows.append(("cycles", "initialize", "-", True, True, time.monotonic() - start))
+    for i in range(cycles):
+        name = f"__CheMCPTest_AECycle_{i}_{int(time.monotonic() * 1000)}__"
+        created_id = None
+        for label, tool, arguments in [
+            (f"c{i} create", "create_folder", {"title": name}),
+            (f"c{i} rename", "update_folder",
+             lambda: {"id": created_id, "title": name + "r"}),
+            (f"c{i} list", "list_folders", {}),
+            (f"c{i} delete", "delete_folder", lambda: {"id": created_id}),
+        ]:
+            if callable(arguments):
+                arguments = arguments()
+            try:
+                elapsed, ok, text = server.call_tool(tool, arguments, timeout)
+            except (TimeoutError, BrokenPipeError) as e:
+                print(f"  {label} WEDGED: {e}", flush=True)
+                wedge_forensics(server.proc.pid)
+                return rows
+            rows.append(("cycles", label, tool, True, ok, elapsed))
+            print(f"  {label}: {'ok' if ok else 'ERROR'} {elapsed:.2f}s", flush=True)
+            if tool == "create_folder" and ok:
+                created_id = json.loads(text)["id"]
+    server.close()
+    return rows
+
+
+def wedge_forensics(server_pid):
+    """While the wedge is live: stack-sample the stuck server, stack-sample
+    Notes.app, and probe Notes from an independent osascript to separate
+    'this process is wedged' from 'Notes is wedged for everyone'."""
+    print(f"\n--- osascript probe while server {server_pid} is wedged ---", flush=True)
+    t0 = time.monotonic()
+    try:
+        probe = subprocess.run(
+            ["osascript", "-e", 'tell application "Notes" to count of folders'],
+            capture_output=True, text=True, timeout=30,
+        )
+        print(f"count of folders -> {probe.stdout.strip() or probe.stderr.strip()} "
+              f"in {time.monotonic() - t0:.2f}s", flush=True)
+    except subprocess.TimeoutExpired:
+        print(f"osascript probe ALSO wedged (>30s): Notes.app itself is stuck", flush=True)
+
+    for title, pid in [("wedged server", str(server_pid))] + [
+        ("Notes.app", p) for p in subprocess.run(
+            ["pgrep", "-x", "Notes"], capture_output=True, text=True
+        ).stdout.split()
+    ]:
+        print(f"\n--- sample of {title} (pid {pid}) ---", flush=True)
+        out = subprocess.run(["/usr/bin/sample", pid, "3"],
+                             capture_output=True, text=True)
+        print(out.stdout or out.stderr, flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default=".build/debug/CheAppleNotesMCP")
     parser.add_argument("--repeat", type=int, default=1, help="runs per scenario")
     parser.add_argument("--timeout", type=float, default=120, help="per-call wait (s)")
-    parser.add_argument("--no-warmup", action="store_true",
-                        help="set CHE_MCP_NO_AE_WARMUP=1 in the server env")
-    parser.add_argument("--settle", type=float, default=0,
-                        help="seconds to wait after initialize before the first "
-                             "tool call (models a client that connects at startup "
-                             "but calls later, after any warm-up has finished)")
+    parser.add_argument("--cycles", type=int, default=0,
+                        help="instead of the two scenarios, run N folder "
+                             "create/rename/list/delete cycles through one "
+                             "long-lived server process (shared-server pattern)")
     args = parser.parse_args()
 
-    extra_env = {"CHE_MCP_NO_AE_WARMUP": "1"} if args.no_warmup else {}
     suffix = str(int(time.time()))
 
     scenarios = [
@@ -187,19 +239,24 @@ def main():
     ]
 
     print(f"binary: {args.binary}")
-    print(f"warm-up: {'disabled (CHE_MCP_NO_AE_WARMUP=1)' if args.no_warmup else 'server default'}")
-    print(f"settle: {args.settle}s after initialize")
     all_rows = []
+    if args.cycles:
+        all_rows = run_cycles(args.binary, args.cycles, args.timeout)
+        print_table(all_rows)
+        return
     for i in range(args.repeat):
         for name, calls in scenarios:
             label = f"{name}#{i + 1}" if args.repeat > 1 else name
             print(f"\nrunning {label} (fresh server process)...", flush=True)
             try:
-                all_rows += run_scenario(label, args.binary, calls, args.timeout,
-                                         extra_env, args.settle)
-            except (TimeoutError, BrokenPipeError, KeyError) as e:
+                all_rows += run_scenario(label, args.binary, calls, args.timeout)
+            except (TimeoutError, BrokenPipeError) as e:
                 print(f"  scenario aborted: {e}")
 
+    print_table(all_rows)
+
+
+def print_table(all_rows):
     print(f"\n{'scenario':<16} {'call':<18} {'tool':<14} {'expected':<9} {'got':<6} {'seconds':>8}")
     for scenario, label, tool, expected_ok, ok, elapsed in all_rows:
         exp = "ok" if expected_ok else "error"
