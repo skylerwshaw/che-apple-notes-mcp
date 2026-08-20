@@ -30,9 +30,16 @@ test-unit:
 # AS-fallback tests still run).
 # Sweeps fixture folders afterwards even when tests fail — per-test teardown
 # is best-effort and a failed test can orphan its folder.
+#
+# --no-parallel: E2E suites contend for exclusive real-world resources — the
+# ShareWorkflow tests drive Notes.app's actual menus and focus, and every
+# AppleScript call shares one serial main-thread lane in the shared server
+# process. Run in parallel, UI tests fail with "share menu unavailable" and
+# queued calls (e.g. a batch create behind two ~25s share scripts) blow the
+# client deadline. Serial suites still finish in a couple of minutes.
 test-e2e: build
 	@./scripts/grant-debug-fda.sh || true
-	swift test $(FALLBACK_FLAGS) --filter CheAppleNotesMCPE2ETests; \
+	swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests; \
 	status=$$?; ./scripts/cleanup-test-folders.sh || true; exit $$status
 
 # Delete any __CheMCPTest_* folders left in Notes.app by aborted test runs.
