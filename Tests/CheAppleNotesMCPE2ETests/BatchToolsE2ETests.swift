@@ -5,13 +5,15 @@ import Testing
 
     @Test func createNotesBatchReturnsAllIDs() async throws {
         try await withFixtureFolder { client, fixture in
-            let payload = #"""
-            {"notes":[
-                {"title":"b1","body_text":"x","folder":"\#(fixture.name)"},
-                {"title":"b2","body_text":"y","folder":"\#(fixture.name)"},
-                {"title":"b3","body_text":"z","folder":"\#(fixture.name)"}
-            ]}
-            """#
+            // Single line, deliberately: the transport is newline-delimited
+            // JSON-RPC, so a multi-line payload splits the request into
+            // unparseable fragments the server silently drops — this test
+            // then hangs to the client deadline (issue [#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)'s longest-lived
+            // red herring). MCPClient.send now rejects embedded newlines.
+            let note = { (t: String, b: String) in
+                #"{"title":"\#(t)","body_text":"\#(b)","folder":"\#(fixture.name)"}"#
+            }
+            let payload = #"{"notes":[\#(note("b1", "x")),\#(note("b2", "y")),\#(note("b3", "z"))]}"#
             let result = try await client.callTool(name: "create_notes_batch", arguments: payload)
             #expect(!result.isError)
             // Decode rather than substring-count: jsonify escapes "/" as

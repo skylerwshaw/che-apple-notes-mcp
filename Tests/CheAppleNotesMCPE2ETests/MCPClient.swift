@@ -208,6 +208,13 @@ actor MCPClient {
     /// server) went away mid-write.
     private func send(_ jsonLine: String) throws {
         guard !closed else { throw MCPError.serverExitedEarly }
+        // The transport is newline-delimited: an embedded newline (e.g. a
+        // caller interpolating a multi-line raw string as arguments) splits
+        // the request into fragments the server silently discards, and the
+        // call hangs to the response deadline. Fail loudly instead.
+        guard !jsonLine.contains("\n") else {
+            throw MCPError.protocolError("message contains embedded newline; JSON-RPC framing is one line per message")
+        }
         var data = Data(jsonLine.utf8)
         data.append(0x0A)
         let fd = stdinHandle.fileDescriptor

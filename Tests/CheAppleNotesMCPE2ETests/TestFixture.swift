@@ -86,14 +86,7 @@ private actor SharedServer {
                 generation += 1
                 gen = generation
                 task = Task {
-                    // 120s, not the 60s default: spawned under the swift-test
-                    // runner (only there — the same binary driven from a
-                    // shell answers its first Apple Event in <1s), the
-                    // process's first Apple Event has measured >60s, so the
-                    // run's first fixture create must be allowed to outwait
-                    // it. Every later call is milliseconds; the wider ceiling
-                    // only slows how fast a genuine hang is reported.
-                    let fresh = try MCPClient(responseTimeout: 120)
+                    let fresh = try MCPClient()
                     _ = try await fresh.initialize()
                     return fresh
                 }
