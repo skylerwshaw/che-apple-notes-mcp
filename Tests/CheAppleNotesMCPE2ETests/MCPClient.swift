@@ -130,6 +130,9 @@ actor MCPClient {
         return "\(cwd)/.build/debug/CheAppleNotesMCP"
     }
 
+    /// Whether the child is still running and this client is usable.
+    var isAlive: Bool { !closed && process.isRunning }
+
     /// Terminate the child process. Safe to call multiple times.
     func close() {
         guard !closed else { return }

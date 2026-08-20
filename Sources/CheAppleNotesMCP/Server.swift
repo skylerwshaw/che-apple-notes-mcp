@@ -7,7 +7,7 @@ import MCP
 /// `NotesController` (AppleScript).
 final class CheAppleNotesMCPServer {
     private let server: Server
-    private let transport: StdioTransport
+    private let transport: SerializedStdioTransport
     private let tools: [Tool]
 
     private let capabilities: Capabilities
@@ -34,7 +34,7 @@ final class CheAppleNotesMCPServer {
             version: AppVersion.current,
             capabilities: .init(tools: .init())
         )
-        self.transport = StdioTransport()
+        self.transport = SerializedStdioTransport()
 
         await registerHandlers()
     }
@@ -55,7 +55,7 @@ final class CheAppleNotesMCPServer {
             version: AppVersion.current,
             capabilities: .init(tools: .init())
         )
-        self.transport = StdioTransport()
+        self.transport = SerializedStdioTransport()
         await registerHandlers()
     }
 

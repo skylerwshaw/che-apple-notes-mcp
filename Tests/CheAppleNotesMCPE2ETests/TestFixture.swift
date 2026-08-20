@@ -43,21 +43,48 @@ func settleForNotesFlush() async throws {
 private actor SharedServer {
     static let instance = SharedServer()
     private var spawn: Task<MCPClient, Error>?
+    private var generation = 0
 
     /// Memoizes the in-flight spawn as a Task BEFORE the first await: actors
     /// are reentrant, so a bare `if client == nil` check let every
     /// concurrently-starting suite race past it and spawn its own server
     /// (observed: 8 processes at once, whose blocking stderr drains then
     /// starved the cooperative thread pool and deadlocked the entire run).
+    ///
+    /// A cached spawn is retired — never handed out — when it failed to
+    /// launch or its server has since died, and one replacement is attempted
+    /// per call: without this, a single crashed server failed every
+    /// remaining test in the run in milliseconds. The generation counter
+    /// keeps a slow awaiter from retiring a healthy replacement some other
+    /// caller already installed.
     func get() async throws -> MCPClient {
-        if spawn == nil {
-            spawn = Task {
-                let fresh = try MCPClient()
-                _ = try await fresh.initialize()
-                return fresh
+        var lastError: Error = FixtureError.setupFailed("shared server unavailable")
+        for _ in 0..<2 {
+            let task: Task<MCPClient, Error>
+            let gen: Int
+            if let existing = spawn {
+                task = existing
+                gen = generation
+            } else {
+                generation += 1
+                gen = generation
+                task = Task {
+                    let fresh = try MCPClient()
+                    _ = try await fresh.initialize()
+                    return fresh
+                }
+                spawn = task
             }
+            do {
+                let client = try await task.value
+                if await client.isAlive { return client }
+                lastError = FixtureError.setupFailed("shared server process died")
+            } catch {
+                lastError = error
+            }
+            if generation == gen { spawn = nil }
         }
-        return try await spawn!.value
+        throw lastError
     }
 }
 

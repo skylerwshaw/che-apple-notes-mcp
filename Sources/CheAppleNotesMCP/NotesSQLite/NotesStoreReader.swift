@@ -19,7 +19,13 @@ final class NotesStoreReader {
         self.path = url.path
 
         let uri = "file:\(url.path)?mode=ro&cache=shared"
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX
+        // FULLMUTEX (serialized), not NOMUTEX: tool handlers run concurrently
+        // on the cooperative pool and share this one connection. Under
+        // NOMUTEX, simultaneous reads (e.g. several clients calling
+        // list_folders at once) corrupted SQLite's internal lock state and
+        // crashed the server with _os_unfair_lock_unowned_abort in
+        // sqlite3_step (issue [#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16) fallout).
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(uri, &db, flags, nil)
         guard rc == SQLITE_OK else {
             let msg = String(cString: sqlite3_errstr(rc))
