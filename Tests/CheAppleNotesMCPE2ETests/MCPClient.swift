@@ -71,6 +71,12 @@ actor MCPClient {
         binaryPath: String = MCPClient.defaultBinaryPath,
         responseTimeout: TimeInterval = 60
     ) throws {
+        // A child exiting between our liveness check and a pipe write is
+        // unavoidable; without this, that write's SIGPIPE kills the entire
+        // test runner (signal 13). Ignored process-wide so send() sees EPIPE
+        // and can throw serverExitedEarly instead. Idempotent.
+        signal(SIGPIPE, SIG_IGN)
+
         let proc = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -190,11 +196,30 @@ actor MCPClient {
         try send(message)
     }
 
+    /// Writes with write(2) rather than FileHandle so a dead child is a
+    /// thrown error, not a fatality: FileHandle.write raises an uncatchable
+    /// ObjC exception on a broken pipe, and without `signal(SIGPIPE, SIG_IGN)`
+    /// (installed in init) the kernel kills the whole test runner outright —
+    /// observed as the full E2E run dying with signal 13 the moment any
+    /// child (a deliberately-exiting stub server, a terminated shared
+    /// server) went away mid-write.
     private func send(_ jsonLine: String) throws {
         guard !closed else { throw MCPError.serverExitedEarly }
         var data = Data(jsonLine.utf8)
         data.append(0x0A)
-        try stdinHandle.write(contentsOf: data)
+        let fd = stdinHandle.fileDescriptor
+        try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            var offset = 0
+            while offset < raw.count {
+                let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    if errno == EPIPE { throw MCPError.serverExitedEarly }
+                    throw MCPError.protocolError("write failed: \(String(cString: strerror(errno)))")
+                }
+                offset += n
+            }
+        }
     }
 
     private func waitForResponse(id: Int) async throws -> String {
