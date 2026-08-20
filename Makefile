@@ -2,7 +2,7 @@ BINARY_NAME := CheAppleNotesMCP
 
 FALLBACK_FLAGS := $(shell swift build 2>&1 | grep -q "SendingRisksDataRace" && echo "-Xswiftc -swift-version -Xswiftc 5")
 
-.PHONY: build release install clean test test-unit test-e2e
+.PHONY: build release install clean test test-unit test-e2e clean-test-data
 
 build:
 	swift build $(FALLBACK_FLAGS)
@@ -28,9 +28,16 @@ test-unit:
 # is up to date, then probe FDA via grant-debug-fda.sh (non-blocking: the
 # script exits 1 if FDA missing, prints instructions, and we continue so
 # AS-fallback tests still run).
+# Sweeps fixture folders afterwards even when tests fail — per-test teardown
+# is best-effort and a failed test can orphan its folder.
 test-e2e: build
 	@./scripts/grant-debug-fda.sh || true
-	swift test $(FALLBACK_FLAGS) --filter CheAppleNotesMCPE2ETests
+	swift test $(FALLBACK_FLAGS) --filter CheAppleNotesMCPE2ETests; \
+	status=$$?; ./scripts/cleanup-test-folders.sh || true; exit $$status
+
+# Delete any __CheMCPTest_* folders left in Notes.app by aborted test runs.
+clean-test-data:
+	./scripts/cleanup-test-folders.sh
 
 clean:
 	swift package clean
