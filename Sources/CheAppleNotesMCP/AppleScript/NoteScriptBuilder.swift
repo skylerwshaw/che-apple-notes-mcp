@@ -56,8 +56,10 @@ enum NoteScriptBuilder {
         """
         tell application "Notes"
             set f to folder id \(AppleScriptEscape.quote(id))
-            if (count of notes of f) > 0 then
-                error "Folder is not empty"
+            set noteCount to count of notes of f
+            set subfolderCount to count of folders of f
+            if noteCount > 0 or subfolderCount > 0 then
+                error "Folder is not empty: contains " & noteCount & " notes and " & subfolderCount & " subfolders"
             end if
             delete f
             return "deleted"

@@ -144,6 +144,44 @@ import Testing
         }
     }
 
+    @Test func deleteFolderRefusesFolderContainingOnlySubfolders() async throws {
+        // Acceptance for [#4](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/4):
+        // a folder whose only contents are subfolders must be refused, not
+        // deleted along with its subtree.
+        try await withFixtureFolder { client, _ in
+            let containerName = "__CheMCPTest_\(UUID().uuidString.uppercased())__container"
+            let createResult = try await client.callTool(
+                name: "create_folder",
+                arguments: #"{"title":"\#(containerName)"}"#
+            )
+            struct FolderDTO: Decodable { let id: String }
+            let container = try JSONDecoder().decode(FolderDTO.self, from: Data(createResult.text.utf8))
+
+            let subName = "__CheMCPTest_\(UUID().uuidString.uppercased())__sub"
+            let subId = try createSubfolder(named: subName, parentID: container.id)
+            // ponytail: the subfolder above is created by a *second*, independent
+            // osascript process rather than the server's own AppleScript engine
+            // (create_folder has no parent param). Handing the same folder id to
+            // the server's engine right after another process just wrote to it
+            // has been observed to wedge Notes.app's Apple Event handling for
+            // that object for a long time. A longer settle here is the cheap
+            // fix; if it still flakes, serialize subfolder creation through the
+            // server itself once create_folder grows a parent_id param.
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+
+            let delete = try await client.callTool(
+                name: "delete_folder",
+                arguments: #"{"id":"\#(container.id)"}"#
+            )
+            #expect(delete.isError)
+            #expect(delete.text.contains("subfolders"))
+
+            // Clean up: subfolder first, then the now-empty container.
+            _ = try? await client.callTool(name: "delete_folder", arguments: #"{"id":"\#(subId)"}"#)
+            _ = try? await client.callTool(name: "delete_folder", arguments: #"{"id":"\#(container.id)"}"#)
+        }
+    }
+
     @Test func deleteFolderRemovesAnEmptyFolder() async throws {
         try await withFixtureFolder { client, _ in
             // Create a second empty folder dedicated to deletion verification.
@@ -171,4 +209,26 @@ import Testing
             #expect(deleteDto.id == dto.id)
         }
     }
+}
+
+/// Create a folder nested inside `parentID`. `create_folder` has no parent
+/// parameter (nested creation isn't part of the tool surface yet), so this
+/// shells out to osascript directly, matching the black-box pattern
+/// `dismissSharePopover` uses in ShareWorkflowE2ETests.swift.
+private func createSubfolder(named name: String, parentID: String) throws -> String {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", #"""
+        tell application "Notes"
+            set p to folder id "\#(parentID)"
+            set s to make new folder with properties {name:"\#(name)"} at p
+            return id of s
+        end tell
+        """#]
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    try proc.run()
+    proc.waitUntilExit()
+    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return output.trimmingCharacters(in: .whitespacesAndNewlines)
 }

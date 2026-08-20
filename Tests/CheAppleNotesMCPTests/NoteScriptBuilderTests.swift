@@ -37,7 +37,10 @@ import Testing
     @Test func deleteFolderRefusesWhenNonEmpty() {
         let s = NoteScriptBuilder.deleteFolder(id: "folder-id")
         #expect(s.contains("count of notes of f"))
+        #expect(s.contains("count of folders of f"))
         #expect(s.contains("Folder is not empty"))
+        #expect(s.contains("notes"))
+        #expect(s.contains("subfolders"))
         #expect(s.contains("delete f"))
     }
 
