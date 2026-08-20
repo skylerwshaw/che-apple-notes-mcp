@@ -10,8 +10,7 @@ final class CheAppleNotesMCPServer {
     private let transport: SerializedStdioTransport
     private let tools: [Tool]
 
-    private let capabilities: Capabilities
-    private var sqlite: NotesStoreReader?
+    private let sqlite: NotesStoreReader?
     private let applescript = NotesController()
     private let undoStack = UndoStack()
     // Read-repair (ADR 0002, [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)):
@@ -24,33 +23,19 @@ final class CheAppleNotesMCPServer {
         return f
     }()
 
-    init() async throws {
-        self.capabilities = Capabilities.detect()
-        if capabilities.sqliteReadable {
-            self.sqlite = try? NotesStoreReader()
-        }
-
-        self.tools = Self.defineTools()
-
-        self.server = Server(
-            name: AppVersion.name,
-            version: AppVersion.current,
-            capabilities: .init(tools: .init())
+    convenience init() async {
+        await self.init(
+            sqlite: Capabilities.detect().sqliteReadable ? (try? NotesStoreReader()) : nil
         )
-        self.transport = SerializedStdioTransport()
-
-        await registerHandlers()
     }
 
-    /// Test-only constructor — lets unit tests inject a nil or pre-built
-    /// `NotesStoreReader` so they can exercise the AppleScript-fallback and
-    /// `featureRequiresSQLite` error paths without touching the real Notes
-    /// store on disk. Not used by production (`main.swift` always calls `init()`).
-    ///
-    /// The `sqlite` parameter is applied verbatim — passing `nil` forces the
-    /// FDA-missing code path regardless of the host's real capabilities.
+    /// Designated initializer. Production (`main.swift` via `init()`) passes
+    /// the detected reader; unit tests inject nil or a fixture-backed reader
+    /// to exercise the AppleScript-fallback and `featureRequiresSQLite` error
+    /// paths without touching the real Notes store on disk. The parameter is
+    /// applied verbatim — `nil` forces the FDA-missing code path regardless
+    /// of the host's real capabilities.
     init(sqlite: NotesStoreReader?) async {
-        self.capabilities = Capabilities.detect()
         self.sqlite = sqlite
         self.tools = Self.defineTools()
         self.server = Server(

@@ -50,10 +50,10 @@ if CommandLine.arguments.contains("--setup") {
 }
 
 if CommandLine.arguments.contains("--cli") {
-    let server = try await CheAppleNotesMCPServer()
+    let server = await CheAppleNotesMCPServer()
     await CLIRunner.run(server: server, args: CommandLine.arguments)
     exit(0)
 }
 
-let server = try await CheAppleNotesMCPServer()
+let server = await CheAppleNotesMCPServer()
 try await server.run()

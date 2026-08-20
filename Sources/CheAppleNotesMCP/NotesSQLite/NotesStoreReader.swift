@@ -28,9 +28,7 @@ final class NotesStoreReader {
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(uri, &db, flags, nil)
         guard rc == SQLITE_OK else {
-            let msg = String(cString: sqlite3_errstr(rc))
             throw NotesSQLiteError.cannotOpen(path: url.path, code: rc)
-                .prepending("\(msg)")
         }
 
         // Populate entity ID cache from Z_PRIMARYKEY.
@@ -79,31 +77,6 @@ final class NotesStoreReader {
             throw NotesSQLiteError.entityNotFound(name)
         }
         return id
-    }
-
-    // MARK: - Accounts
-
-    func listAccounts() throws -> [Account] {
-        let accountEnt = try entityID(for: "ICAccount")
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, SQLQueries.listAccounts, -1, &stmt, nil) == SQLITE_OK else {
-            throw NotesSQLiteError.prepareFailed(
-                sql: SQLQueries.listAccounts,
-                message: String(cString: sqlite3_errmsg(db))
-            )
-        }
-        defer { sqlite3_finalize(stmt) }
-
-        try bind(stmt: stmt, name: ":entityID", value: Int64(accountEnt))
-
-        var results: [Account] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let pk = sqlite3_column_int64(stmt, 0)
-            let name = columnText(stmt, 1) ?? "(unnamed)"
-            let ident = columnText(stmt, 2) ?? ""
-            results.append(Account(pk: pk, name: name, identifier: ident))
-        }
-        return results
     }
 
     // MARK: - Folders
@@ -310,9 +283,10 @@ final class NotesStoreReader {
     /// and entity segment part of the match, so a folder id never resolves to
     /// the note sharing its pk.
     func getNote(identifier: String, includeBody: Bool = true) throws -> Note? {
-        var options = NoteListOptions()
-        options.includeBody = includeBody
-        let notes = try listNotes(options: options).filter {
+        // Deliberately list WITHOUT bodies and attach the body to the single
+        // match below — includeBody on the listing would gunzip+decode every
+        // note in the store to return one.
+        let notes = try listNotes().filter {
             $0.identifier == identifier || $0.appleScriptID == identifier
         }
         return notes.first.map { n in
@@ -582,12 +556,5 @@ final class NotesStoreReader {
     private func columnDoubleOptional(_ stmt: OpaquePointer?, _ i: Int32) -> Double? {
         if sqlite3_column_type(stmt, i) == SQLITE_NULL { return nil }
         return sqlite3_column_double(stmt, i)
-    }
-}
-
-private extension NotesSQLiteError {
-    func prepending(_ prefix: String) -> NotesSQLiteError {
-        // Preserves enum case but embellishes message via cannotOpen/prepareFailed.
-        return self
     }
 }

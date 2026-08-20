@@ -5,7 +5,6 @@ import SQLite3
 /// call `detect()` once at startup and cache the result.
 struct Capabilities {
     let sqliteReadable: Bool
-    let appleScriptAvailable: Bool
 
     static let noteStoreURL: URL = {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -14,15 +13,12 @@ struct Capabilities {
     }()
 
     /// Detect capabilities at startup. Only probes SQLite (fast, ~1ms). The
-    /// AppleScript probe is skipped here because it would block for up to
-    /// 120 s if Notes.app is busy (iCloud sync, indexing). AS availability is
-    /// treated as "always true" at startup and checked lazily on first write.
-    /// Use `--setup` to explicitly test AS access with a long timeout.
+    /// AppleScript probe is deliberately absent because it would block for up
+    /// to 120 s if Notes.app is busy (iCloud sync, indexing); AS access is
+    /// checked lazily on first write. Use `--setup` to explicitly test AS
+    /// access with a long timeout.
     static func detect() -> Capabilities {
-        Capabilities(
-            sqliteReadable: probeSQLiteAccess(),
-            appleScriptAvailable: true
-        )
+        Capabilities(sqliteReadable: probeSQLiteAccess())
     }
 
     /// Try to open NoteStore.sqlite read-only. If Full Disk Access has been granted
