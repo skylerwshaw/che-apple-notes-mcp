@@ -37,18 +37,9 @@ test-unit:
 # process. Run in parallel, UI tests fail with "share menu unavailable" and
 # queued calls (e.g. a batch create behind two ~25s share scripts) blow the
 # client deadline. Serial suites still finish in a couple of minutes.
-# Interactive runs get in-place updating test lines: swift test runs under a
-# pty (`script`) so swift-testing keeps line-buffering, and live-test-lines.py
-# collapses each "started" line into a transient status the ✔/✘ result
-# replaces. Non-TTY runs (CI, redirects) use the plain output unchanged.
 test-e2e: build
 	@./scripts/grant-debug-fda.sh || true
-	if [ -t 1 ]; then \
-		set -o pipefail; \
-		script -q /dev/null swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests < /dev/null | python3 scripts/live-test-lines.py; \
-	else \
-		swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests; \
-	fi; \
+	swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests; \
 	status=$$?; ./scripts/cleanup-test-folders.sh || true; exit $$status
 
 # Delete any __CheMCPTest_* folders left in Notes.app by aborted test runs.
