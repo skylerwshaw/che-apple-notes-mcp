@@ -115,7 +115,7 @@ final class CheAppleNotesMCPServer {
             ),
             Tool(
                 name: "delete_folder",
-                description: "Delete an empty folder. Errors if the folder contains notes.",
+                description: "Delete an empty folder. Errors if the folder contains notes or subfolders.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
