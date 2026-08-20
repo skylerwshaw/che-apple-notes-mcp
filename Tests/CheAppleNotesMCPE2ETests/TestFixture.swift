@@ -76,13 +76,19 @@ func withFixtureFolder(
 /// doesn't exist on the host, retry with the server's default account.
 /// Returns `(folderId, resolvedAccountName?)` or nil if both attempts fail.
 private func createFixtureFolder(client: MCPClient, folderName: String) async throws -> (String, String?)? {
-    // First attempt: prefer On My Mac when present.
-    let preferredArgs = #"{"title":"\#(folderName)","account":"On My Mac"}"#
-    let preferred = try await client.callTool(name: "create_folder", arguments: preferredArgs)
-    if !preferred.isError,
-       let id = try? parseFolderId(from: preferred.text), !id.isEmpty
-    {
-        return (id, "On My Mac")
+    // Ask whether On My Mac exists rather than probing by attempting a create.
+    // A create against a missing account takes ~30s to come back (see #16),
+    // which on its own exceeds the client's response deadline, so the probe
+    // never reached the fallback below. list_folders reads SQLite, so asking
+    // costs milliseconds.
+    if await accountExists("On My Mac", client: client) {
+        let preferredArgs = #"{"title":"\#(folderName)","account":"On My Mac"}"#
+        let preferred = try await client.callTool(name: "create_folder", arguments: preferredArgs)
+        if !preferred.isError,
+           let id = try? parseFolderId(from: preferred.text), !id.isEmpty
+        {
+            return (id, "On My Mac")
+        }
     }
     // Fallback: let the server pick the default account.
     let fallbackArgs = #"{"title":"\#(folderName)"}"#
@@ -93,6 +99,30 @@ private func createFixtureFolder(client: MCPClient, folderName: String) async th
         return (id, nil)
     }
     return nil
+}
+
+/// True when any folder in the store reports `name` as its account.
+///
+/// A false negative is safe: the caller falls back to the default account,
+/// which still works, just with the iCloud sync lag that preferring On My Mac
+/// exists to avoid. So an account that exists but holds no folders reads as
+/// absent, and that is fine.
+private func accountExists(_ name: String, client: MCPClient) async -> Bool {
+    guard let result = try? await client.callTool(name: "list_folders"), !result.isError
+    else { return false }
+    return accountNames(inListFoldersJSON: result.text).contains(name)
+}
+
+/// Account names in a `list_folders` payload. Split out from the call so the
+/// key it depends on is testable without a live server: getting `account_name`
+/// wrong would silently make every account look absent.
+func accountNames(inListFoldersJSON json: String) -> Set<String> {
+    struct Row: Decodable {
+        let accountName: String?
+        enum CodingKeys: String, CodingKey { case accountName = "account_name" }
+    }
+    guard let rows = try? JSONDecoder().decode([Row].self, from: Data(json.utf8)) else { return [] }
+    return Set(rows.compactMap(\.accountName).filter { !$0.isEmpty })
 }
 
 /// Delete every note in the fixture folder, then the folder itself.
