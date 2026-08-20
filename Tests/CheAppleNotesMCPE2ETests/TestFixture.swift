@@ -30,6 +30,23 @@ func settleForNotesFlush() async throws {
     try await Task.sleep(nanoseconds: 500_000_000)
 }
 
+/// Poll `condition` until it holds or ~`seconds` elapse; returns whether it
+/// ever held. For read-after-write assertions: Notes persists AppleScript
+/// writes into NoteStore.sqlite lazily, and a rename has been measured
+/// taking 4-8s to become visible to SQLite-backed reads — far beyond the
+/// fixed 500ms `settleForNotesFlush` sleep that suffices for creates.
+func eventually(
+    within seconds: Double = 15,
+    _ condition: () async throws -> Bool
+) async throws -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if try await condition() { return true }
+        try await Task.sleep(nanoseconds: 500_000_000)
+    }
+    return try await condition()
+}
+
 /// One server process shared by every fixture-based E2E test. A fresh server
 /// process pays a ~30s Automation/TCC evaluation on its first Apple Event
 /// ([#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)); when each test spawned its own process, every test paid
@@ -69,7 +86,14 @@ private actor SharedServer {
                 generation += 1
                 gen = generation
                 task = Task {
-                    let fresh = try MCPClient()
+                    // 120s, not the 60s default: spawned under the swift-test
+                    // runner (only there — the same binary driven from a
+                    // shell answers its first Apple Event in <1s), the
+                    // process's first Apple Event has measured >60s, so the
+                    // run's first fixture create must be allowed to outwait
+                    // it. Every later call is milliseconds; the wider ceiling
+                    // only slows how fast a genuine hang is reported.
+                    let fresh = try MCPClient(responseTimeout: 120)
                     _ = try await fresh.initialize()
                     return fresh
                 }

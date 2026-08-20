@@ -14,10 +14,14 @@ import Testing
             """#
             let result = try await client.callTool(name: "create_notes_batch", arguments: payload)
             #expect(!result.isError)
-            // Response shape: either {ids: [...]} or a list — assert at minimum
-            // three identifier-like strings appear.
-            let matches = result.text.components(separatedBy: "x-coredata://")
-            #expect(matches.count >= 4)  // prefix + 3 occurrences
+            // Decode rather than substring-count: jsonify escapes "/" as
+            // "\/", so the raw text contains "x-coredata:\/\/" and a search
+            // for "x-coredata://" can never match.
+            struct BatchResult: Decodable { let count: Int; let ids: [String] }
+            let decoded = try JSONDecoder().decode(BatchResult.self, from: Data(result.text.utf8))
+            #expect(decoded.count == 3)
+            #expect(decoded.ids.count == 3)
+            #expect(decoded.ids.allSatisfy { $0.hasPrefix("x-coredata://") })
         }
     }
 

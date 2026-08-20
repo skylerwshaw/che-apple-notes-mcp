@@ -45,7 +45,7 @@ test-e2e: build
 	@./scripts/grant-debug-fda.sh || true
 	if [ -t 1 ]; then \
 		set -o pipefail; \
-		script -q /dev/null swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests | python3 scripts/live-test-lines.py; \
+		script -q /dev/null swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests < /dev/null | python3 scripts/live-test-lines.py; \
 	else \
 		swift test $(FALLBACK_FLAGS) --no-parallel --filter CheAppleNotesMCPE2ETests; \
 	fi; \

@@ -41,7 +41,9 @@ def main():
             if pending:
                 out.write(CLEAR)
                 pending = False
-            out.write(line + "\n")
+            # \r\n, not bare \n: script(1) can leave the terminal in raw mode
+            # (no ONLCR translation), where bare \n staircases the output.
+            out.write(line + "\r\n")
             out.flush()
     if pending:
         out.write(CLEAR)

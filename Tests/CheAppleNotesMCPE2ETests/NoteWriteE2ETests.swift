@@ -32,18 +32,16 @@ import Testing
                 arguments: #"{"id":"\#(created.id)","title":"After"}"#
             )
             #expect(!update.isError)
-            // get_note is a SQLite-backed read, so it needs the flush like any
-            // other. It only passed without one while canonical ids missed in
-            // SQLite and fell through to AppleScript
-            // ([#7](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/7)).
-            try await settleForNotesFlush()
-
-            let get = try await client.callTool(
-                name: "get_note",
-                arguments: #"{"id":"\#(created.id)"}"#
-            )
-            #expect(!get.isError)
-            #expect(get.text.contains("After"))
+            // get_note is a SQLite-backed read; a rename takes 4-8s to reach
+            // NoteStore.sqlite, so poll rather than sleep a fixed interval.
+            let renamedVisible = try await eventually {
+                let get = try await client.callTool(
+                    name: "get_note",
+                    arguments: #"{"id":"\#(created.id)"}"#
+                )
+                return !get.isError && get.text.contains("After")
+            }
+            #expect(renamedVisible)
         }
     }
 
@@ -134,14 +132,15 @@ import Testing
                 arguments: #"{"id":"\#(row.id)","title":"\#(renamed)"}"#
             )
             #expect(!update.isError)
-            try await settleForNotesFlush()
-
-            let get = try await client.callTool(
-                name: "get_note",
-                arguments: #"{"id":"\#(row.id)"}"#
-            )
-            #expect(!get.isError)
-            #expect(get.text.contains(renamed))
+            // Renames take 4-8s to become visible to SQLite reads; poll.
+            let renamedVisible = try await eventually {
+                let get = try await client.callTool(
+                    name: "get_note",
+                    arguments: #"{"id":"\#(row.id)"}"#
+                )
+                return !get.isError && get.text.contains(renamed)
+            }
+            #expect(renamedVisible)
         }
     }
 }

@@ -192,7 +192,12 @@ enum NoteScriptBuilder {
                         try
                             click menu item "Share Note…" of menu "File" of menu bar 1
                         on error
-                            error "share menu unavailable"
+                            try
+                                -- macOS 26 renamed the item to plain "Share"
+                                click menu item "Share" of menu "File" of menu bar 1
+                            on error
+                                error "share menu unavailable"
+                            end try
                         end try
                     end try
                 end tell
@@ -233,7 +238,12 @@ enum NoteScriptBuilder {
                         try
                             click menu item "Share Folder…" of menu "File" of menu bar 1
                         on error
-                            error "share menu unavailable"
+                            try
+                                -- macOS 26 renamed the item to plain "Share"
+                                click menu item "Share" of menu "File" of menu bar 1
+                            on error
+                                error "share menu unavailable"
+                            end try
                         end try
                     end try
                 end tell

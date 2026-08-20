@@ -153,6 +153,8 @@ import Testing
         #expect(s.contains("tell application \"System Events\""))
         #expect(s.contains("tell process \"Notes\""))
         #expect(s.contains("Share Note"))
+        // macOS 26 renamed the item to plain "Share"; the script must try it.
+        #expect(s.contains("click menu item \"Share\" of menu \"File\""))
         // Spec scenarios require specific error strings on failure.
         #expect(s.contains("share menu unavailable"))
         #expect(s.contains("Notes.app did not activate"))
@@ -165,6 +167,7 @@ import Testing
         // Folder variant uses `show folder id` + Share Folder... menu item.
         #expect(s.contains("show folder id \"x-coredata://abc/ICFolder/p9\""))
         #expect(s.contains("Share Folder"))
+        #expect(s.contains("click menu item \"Share\" of menu \"File\""))
         // Folder-specific error per spec.
         #expect(s.contains("folder not found"))
         #expect(s.contains("share menu unavailable"))
