@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **First-Apple-Event stall** ([#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)): the first Apple Event a freshly
+  spawned server process sends paid a one-off ~14-30s Automation/TCC
+  evaluation (158s for a never-before-seen ad-hoc-signed binary identity),
+  regardless of whether the call succeeded or failed. The server now pays
+  that cost with a warm-up Apple Event fired at startup (skipped when
+  Notes.app isn't running, or when `CHE_MCP_NO_AE_WARMUP` is set), so a
+  client that connects at startup and calls tools later sees its first
+  Apple Event complete in ~0.18s. Every AppleScript the server executes is
+  additionally wrapped in `with timeout of 15 seconds` so a delivered
+  Apple Event's reply wait is bounded well under a 30s client deadline
+  (measured: the wrap does not, and cannot, bound the pre-delivery TCC
+  stall). Concurrent AppleScript executions are now serialized; a timing
+  harness (`scripts/ae-timing-harness.py`) reproduces all measurements.
+
 ### Added
 
 - **Canonical folder identity** ([#2](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/2)): every `list_folders` row now carries `id`

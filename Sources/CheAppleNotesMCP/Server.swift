@@ -60,8 +60,38 @@ final class CheAppleNotesMCPServer {
     }
 
     func run() async throws {
+        warmUpAppleEvents()
         try await server.start(transport: transport)
         await server.waitUntilCompleted()
+    }
+
+    /// The first Apple Event a freshly spawned process sends pays a one-off
+    /// Automation/TCC evaluation before the event is delivered (issue [#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)).
+    /// Measured with scripts/ae-timing-harness.py: ~14-30s per fresh process,
+    /// 158s for a never-before-seen binary identity (the debug binary is
+    /// ad-hoc signed, so every rebuild is a new identity; Apple-signed
+    /// osascript keeps one identity forever, which is why the same script
+    /// costs it 0.18s). The cost hits the process's first Apple Event whether
+    /// it succeeds or fails, is not bounded by `with timeout`, and never
+    /// recurs within the process. Paying it here, concurrently with startup,
+    /// makes the first client-visible Apple Event cost 0.18s for any client
+    /// that connects at startup and calls tools later. A client that sends an
+    /// Apple Event tool call immediately after spawning still queues behind
+    /// the in-flight warm-up on NotesController's execution lock (no worse
+    /// than before; the cost is macOS's and can only be relocated).
+    ///
+    /// Skipped when Notes.app isn't running (the warm-up would launch it as a
+    /// side effect, and a read-only session may never need Apple Events) and
+    /// when CHE_MCP_NO_AE_WARMUP is set (the timing harness uses this to
+    /// measure the raw first-call cost).
+    private func warmUpAppleEvents() {
+        guard ProcessInfo.processInfo.environment["CHE_MCP_NO_AE_WARMUP"] == nil,
+              !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes").isEmpty
+        else { return }
+        let applescript = self.applescript
+        Task.detached(priority: .utility) {
+            _ = try? applescript.run("tell application \"Notes\" to count of accounts")
+        }
     }
 
     // MARK: - Tool definitions

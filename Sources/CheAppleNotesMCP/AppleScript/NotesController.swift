@@ -5,7 +5,13 @@ import Foundation
 ///
 /// All write operations go through here. Read fallbacks (when FDA is not
 /// granted) also use this class.
-final class NotesController {
+///
+/// `@unchecked Sendable`: the only mutable state is OSA's shared component
+/// state inside NSAppleScript, which `executionLock` serializes (concurrent
+/// executions in one process can otherwise cross their results).
+final class NotesController: @unchecked Sendable {
+
+    private let executionLock = NSLock()
 
     enum ControllerError: LocalizedError {
         case executionFailed(number: Int, message: String)
@@ -23,9 +29,38 @@ final class NotesController {
 
     // MARK: - Run
 
+    /// Apple Event reply timeout applied to every script this controller runs.
+    /// Must stay safely under the smallest client response deadline (30s in
+    /// the E2E MCPClient) so a stalled Apple Event surfaces as an error the
+    /// caller can act on instead of silently blowing the caller's deadline
+    /// (issue [#16](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/16)). Scripts with their own `with timeout` blocks (the share
+    /// preparation flow) keep them: an inner block overrides this outer one
+    /// for its scope.
+    ///
+    /// Measured limitation (scripts/ae-timing-harness.py): this bounds only
+    /// the reply wait for a delivered event. The one-off ~14-30s (up to 158s
+    /// on a fresh rebuild) Automation/TCC stall on a process's first Apple
+    /// Event happens before delivery, sails straight past this block, and
+    /// then returns the call's real result rather than error -1712. That
+    /// cost is handled by the startup warm-up in Server.run() instead.
+    static let appleEventTimeoutSeconds = 15
+
+    /// Wrap `source` so each Apple Event it sends waits at most
+    /// `appleEventTimeoutSeconds` for its reply. Applies uniformly to every
+    /// script rather than per-builder, so no generated script can miss it.
+    static func timeoutWrapped(_ source: String) -> String {
+        """
+        with timeout of \(appleEventTimeoutSeconds) seconds
+        \(source)
+        end timeout
+        """
+    }
+
     @discardableResult
     func run(_ source: String) throws -> NSAppleEventDescriptor {
-        guard let script = NSAppleScript(source: source) else {
+        executionLock.lock()
+        defer { executionLock.unlock() }
+        guard let script = NSAppleScript(source: Self.timeoutWrapped(source)) else {
             throw ControllerError.unexpectedResult("failed to compile AppleScript")
         }
         var error: NSDictionary?
