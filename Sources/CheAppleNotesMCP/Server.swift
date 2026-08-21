@@ -13,10 +13,12 @@ final class CheAppleNotesMCPServer {
 
     private let sqlite: NotesStoreReader?
     private let scripting: NotesScripting
-    private let undoStack = UndoStack()
-    // Read-repair (ADR 0002, [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)):
-    // ids this server recently wrote read live via AppleScript in get_note.
-    private let recentWrites = RecentWrites()
+    // Commit point (CONTEXT.md): every mutation routes through here, which
+    // owns undo state and the read-repair set (ADR 0002,
+    // [#11](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/11)).
+    // `scripting` above stays direct for live reads only. `internal` (like
+    // `executeToolCall`) for test reach.
+    let writeCommit: WriteCommit
 
     private let iso8601: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -43,6 +45,7 @@ final class CheAppleNotesMCPServer {
     init(sqlite: NotesStoreReader?, scripting: NotesScripting = NotesController()) async {
         self.sqlite = sqlite
         self.scripting = scripting
+        self.writeCommit = WriteCommit(scripting: scripting, sqlite: sqlite)
         self.tools = Self.defineTools()
         self.server = Server(
             name: AppVersion.name,
@@ -458,20 +461,20 @@ final class CheAppleNotesMCPServer {
     private func handleCreateFolder(_ args: [String: Value]) throws -> String {
         let title = try requireString(args, "title")
         let account = args["account"]?.stringValue
-        let id = try scripting.createFolder(title: title, account: account)
+        let id = try writeCommit.createFolder(title: title, account: account)
         return jsonify(["id": id, "title": title, "account": account ?? ""])
     }
 
     private func handleUpdateFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
         let title = try requireString(args, "title")
-        _ = try scripting.renameFolder(id: id, newTitle: title)
+        _ = try writeCommit.renameFolder(id: id, newTitle: title)
         return jsonify(["id": id, "title": title])
     }
 
     private func handleDeleteFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-        try scripting.deleteFolder(id: id)
+        try writeCommit.deleteFolder(id: id)
         return jsonify(["id": id, "deleted": true])
     }
 
@@ -626,7 +629,7 @@ final class CheAppleNotesMCPServer {
         // flush by a measured 4-8s and would serve the pre-write row. A
         // just-deleted id errors here (not-found) instead of resurrecting
         // the stale row.
-        if recentWrites.isFresh(id) {
+        if writeCommit.isFresh(id) {
             return try getNoteViaScripting(id: id)
         }
         if let sqlite, let note = try sqlite.getNote(identifier: id) {
@@ -677,9 +680,7 @@ final class CheAppleNotesMCPServer {
         let folder = args["folder"]?.stringValue
         let account = args["account"]?.stringValue
 
-        let id = try scripting.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
-        undoStack.record(.create(id: id))
-        recentWrites.record(id)
+        let id = try writeCommit.create(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
         return jsonify([
             "id": id, "title": title, "folder": folder ?? "", "account": account ?? ""
         ] as [String: Any])
@@ -697,45 +698,13 @@ final class CheAppleNotesMCPServer {
             )
         }
 
-        // Capture old state for undo (best-effort — skip if SQLite unavailable)
-        var oldTitle: String? = nil
-        var oldBodyHTML: String? = nil
-        if let sqlite, let existing = try? sqlite.getNote(identifier: id) {
-            oldTitle = existing.title
-            oldBodyHTML = existing.bodyHTML
-        }
-
-        _ = try scripting.updateNote(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
-        undoStack.record(.update(
-            id: id,
-            oldTitle: oldTitle, oldBodyHTML: oldBodyHTML,
-            newTitle: newTitle, newBodyHTML: newBodyHTML
-        ))
-        recentWrites.record(id)
+        try writeCommit.update(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
         return jsonify(["id": id, "updated": true])
     }
 
     private func handleDeleteNote(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-
-        // Capture for undo
-        var capturedTitle = ""
-        var capturedBodyHTML = ""
-        var capturedFolder: String? = nil
-        var capturedAccount: String? = nil
-        if let sqlite, let existing = try? sqlite.getNote(identifier: id) {
-            capturedTitle = existing.title
-            capturedBodyHTML = existing.bodyHTML ?? ""
-            capturedFolder = existing.folderName
-            capturedAccount = existing.accountName
-        }
-
-        try scripting.deleteNote(id: id)
-        undoStack.record(.delete(
-            id: id, title: capturedTitle, bodyHTML: capturedBodyHTML,
-            folder: capturedFolder, account: capturedAccount
-        ))
-        recentWrites.record(id)
+        try writeCommit.delete(id: id)
         return jsonify(["id": id, "deleted": true])
     }
 
@@ -744,14 +713,7 @@ final class CheAppleNotesMCPServer {
         let folder = try requireString(args, "folder")
         let account = args["account"]?.stringValue
 
-        var fromFolder = ""
-        if let sqlite, let existing = try? sqlite.getNote(identifier: id) {
-            fromFolder = existing.folderName ?? ""
-        }
-
-        _ = try scripting.moveNote(id: id, toFolderName: folder, account: account)
-        undoStack.record(.move(id: id, fromFolder: fromFolder, account: account, toFolder: folder))
-        recentWrites.record(id)
+        try writeCommit.move(id: id, toFolder: folder, account: account)
         return jsonify(["id": id, "moved_to": folder])
     }
 
@@ -828,13 +790,13 @@ final class CheAppleNotesMCPServer {
 
     private func handlePrepareShareNote(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-        try scripting.prepareShareNote(id: id)
+        try writeCommit.prepareShareNote(id: id)
         return jsonify(["prepared": true, "id": id] as [String: Any])
     }
 
     private func handlePrepareShareFolder(_ args: [String: Value]) throws -> String {
         let id = try requireString(args, "id")
-        try scripting.prepareShareFolder(id: id)
+        try writeCommit.prepareShareFolder(id: id)
         return jsonify(["prepared": true, "id": id] as [String: Any])
     }
 
@@ -860,11 +822,7 @@ final class CheAppleNotesMCPServer {
                 account: obj["account"]?.stringValue
             ))
         }
-        let ids = try scripting.createNotesBatch(entries)
-        for id in ids {
-            undoStack.record(.create(id: id))
-            recentWrites.record(id)
-        }
+        let ids = try writeCommit.createBatch(entries)
         return jsonify(["ids": ids, "count": ids.count] as [String: Any])
     }
 
@@ -876,8 +834,7 @@ final class CheAppleNotesMCPServer {
         let folder = try requireString(args, "folder")
         let account = args["account"]?.stringValue
 
-        try scripting.moveNotesBatch(ids, toFolderName: folder, account: account)
-        for id in ids { recentWrites.record(id) }
+        try writeCommit.moveBatch(ids, toFolder: folder, account: account)
         return jsonify(["moved_count": ids.count, "destination": folder] as [String: Any])
     }
 
@@ -886,62 +843,76 @@ final class CheAppleNotesMCPServer {
             throw NotesServerError.invalidArgument("ids must be an array")
         }
         let ids = idsArr.compactMap { $0.stringValue }
-        try scripting.deleteNotesBatch(ids)
-        for id in ids { recentWrites.record(id) }
+        try writeCommit.deleteBatch(ids)
         return jsonify(["deleted_count": ids.count] as [String: Any])
     }
 
     // MARK: - Handlers: undo/redo
 
     private func handleUndo() throws -> String {
-        guard let op = undoStack.popForUndo() else {
+        guard let op = writeCommit.popForUndo() else {
             return jsonify(["undone": false, "reason": "stack empty"] as [String: Any])
         }
         switch op {
         case .create(let id):
-            try scripting.deleteNote(id: id)
-            recentWrites.record(id)
+            try writeCommit.applyDelete(id: id)
         case .update(let id, let oldTitle, let oldBodyHTML, _, _):
-            _ = try scripting.updateNote(id: id, newTitle: oldTitle, newBodyHTML: oldBodyHTML)
-            recentWrites.record(id)
+            try writeCommit.applyUpdate(id: id, title: oldTitle, bodyHTML: oldBodyHTML)
         case .delete(_, let title, let bodyHTML, let folder, let account):
-            // Recreation mints a new id; record that one. The old id was
-            // already recorded by the delete and correctly reads not-found.
-            let newID = try scripting.createNote(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
-            recentWrites.record(newID)
+            // Recreation mints a new id; record that one and rewrite the
+            // redo entry to match (#24). The old id was already recorded by
+            // the delete and correctly reads not-found.
+            _ = try writeCommit.applyRecreate(title: title, bodyHTML: bodyHTML, folder: folder, account: account)
         case .move(let id, let fromFolder, let account, _):
-            _ = try scripting.moveNote(id: id, toFolderName: fromFolder, account: account)
-            recentWrites.record(id)
+            try writeCommit.applyMove(id: id, toFolder: fromFolder ?? "", account: account)
         }
         return jsonify(["undone": true, "operation": op.humanDescription] as [String: Any])
     }
 
     private func handleRedo() throws -> String {
-        guard let op = undoStack.popForRedo() else {
+        // Peek rather than pop: refusing after popping would silently
+        // migrate the entry back onto the undo stack, cycling it forever on
+        // alternating undo/redo calls (#24).
+        guard let peeked = writeCommit.peekForRedo() else {
+            return jsonify(["redone": false, "reason": "stack empty"] as [String: Any])
+        }
+        if case .create(let id) = peeked {
+            // Can't recreate a deleted id — report failure without popping.
+            return jsonify(["redone": false, "reason": "create redo requires new create call", "id": id] as [String: Any])
+        }
+        // `UndoStack` has no lock of its own (tool calls are assumed not to
+        // race each other, same as `RecentWrites`), so a concurrent redo
+        // could in principle drain the stack between the peek above and
+        // this pop. Guard rather than force-unwrap so that degrades to
+        // "stack empty" instead of crashing the request.
+        // `UndoStack` has no lock of its own (tool calls are assumed not to
+        // race each other, same as `RecentWrites`), so a concurrent redo
+        // could in principle drain the stack between the peek above and
+        // this pop. Guard rather than force-unwrap so that degrades to
+        // "stack empty" instead of crashing the request.
+        guard let op = writeCommit.popForRedo() else {
             return jsonify(["redone": false, "reason": "stack empty"] as [String: Any])
         }
         switch op {
-        case .create(let id):
-            // Can't recreate a deleted id — report failure
-            return jsonify(["redone": false, "reason": "create redo requires new create call", "id": id] as [String: Any])
+        case .create:
+            // Unreachable absent a race: peekForRedo already refused .create
+            // above without popping.
+            return jsonify(["redone": false, "reason": "create redo requires new create call"] as [String: Any])
         case .update(let id, _, _, let newTitle, let newBodyHTML):
-            _ = try scripting.updateNote(id: id, newTitle: newTitle, newBodyHTML: newBodyHTML)
-            recentWrites.record(id)
+            try writeCommit.applyUpdate(id: id, title: newTitle, bodyHTML: newBodyHTML)
         case .delete(let id, _, _, _, _):
-            try scripting.deleteNote(id: id)
-            recentWrites.record(id)
+            try writeCommit.applyDelete(id: id)
         case .move(let id, _, let account, let toFolder):
-            _ = try scripting.moveNote(id: id, toFolderName: toFolder, account: account)
-            recentWrites.record(id)
+            try writeCommit.applyMove(id: id, toFolder: toFolder, account: account)
         }
         return jsonify(["redone": true, "operation": op.humanDescription] as [String: Any])
     }
 
     private func handleUndoHistory() -> String {
         jsonify([
-            "undo_depth": undoStack.undoDepth(),
-            "redo_depth": undoStack.redoDepth(),
-            "history": undoStack.history()
+            "undo_depth": writeCommit.undoDepth(),
+            "redo_depth": writeCommit.redoDepth(),
+            "history": writeCommit.history()
         ] as [String: Any])
     }
 

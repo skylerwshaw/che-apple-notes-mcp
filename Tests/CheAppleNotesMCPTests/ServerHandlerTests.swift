@@ -132,4 +132,20 @@ import MCP
             #expect(error.errorDescription?.contains(fdaRequiredSubstring) == true)
         }
     }
+
+    // MARK: - WriteCommit degraded capture ([#25](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/25))
+
+    /// Without SQLite, `delete_note` can't capture prior title/body/folder.
+    /// The undo entry is still recorded (best-effort inversion), but must
+    /// surface the gap rather than silently claiming full state.
+    @Test func deleteWithoutSqliteRecordsAVisiblyDegradedUndoEntry() async throws {
+        let fake = FakeNotesApp()
+        let server = await CheAppleNotesMCPServer(sqlite: nil, scripting: fake)
+        let id = fake.seedNote(pk: 1, title: "No SQLite Behind This One")
+
+        _ = try await server.executeToolCall(name: "delete_note", arguments: ["id": .string(id)])
+        let history = try await server.executeToolCall(name: "undo_history", arguments: [:])
+
+        #expect(history.contains("(prior state unavailable)"))
+    }
 }
