@@ -139,8 +139,95 @@ import MCP
             _ = try await server.executeToolCall(name: "undo", arguments: [:])
             let redone = try object(try await server.executeToolCall(name: "redo", arguments: [:]))
             #expect(redone["redone"] as? Bool == false)
-            // Not "stack empty": the op was popped and then refused.
+            // Not "stack empty": the entry was there and got refused.
             #expect(redone["reason"] as? String == "create redo requires new create call")
+        }
+    }
+
+    // [#24](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/24) #2:
+    // a refusal used to pop the entry off the redo stack before refusing it,
+    // silently migrating it onto the undo stack. Refusing twice in a row
+    // regresses that: a migrated entry would flip to "stack empty" (or a
+    // different reason) on the second call instead of refusing identically.
+    @Test func refusedCreateRedoLeavesTheEntryOnTheRedoStackRefusableAgain() async throws {
+        try await withHarness { server, _ in
+            _ = try await server.executeToolCall(name: "create_note", arguments: [
+                "title": .string("Fresh"), "body_text": .string("hi")
+            ])
+            _ = try await server.executeToolCall(name: "undo", arguments: [:])
+
+            let first = try object(try await server.executeToolCall(name: "redo", arguments: [:]))
+            let second = try object(try await server.executeToolCall(name: "redo", arguments: [:]))
+
+            #expect(first["reason"] as? String == "create redo requires new create call")
+            #expect(second["reason"] as? String == "create redo requires new create call")
+
+            let history = try object(try await server.executeToolCall(name: "undo_history", arguments: [:]))
+            #expect(history["undo_depth"] as? Int == 0)
+            #expect(history["redo_depth"] as? Int == 1)
+        }
+    }
+
+    // `Server` fields each tool call on its own `Task` (the vendored SDK's
+    // receive loop, not a serializing actor), and `UndoStack` has no lock —
+    // so two `redo` calls really can race the same entry between
+    // `peekForRedo` and `popForRedo`. This must degrade to a graceful
+    // "stack empty" for the loser, not crash the process on a force-unwrap.
+    @Test func concurrentRedoCallsRacingTheSameEntryNeverCrash() async throws {
+        try await withHarness { server, fake in
+            let id = fake.seedNote(pk: 1, title: "Racy", folder: "Root A")
+            // A .move undo/redo pair pops and applies (unlike undo-of-create,
+            // which refuses without popping), so this actually exercises the
+            // peek-then-pop gap.
+            _ = try await server.executeToolCall(name: "move_note", arguments: [
+                "id": .string(id), "folder": .string("Elsewhere")
+            ])
+            _ = try await server.executeToolCall(name: "undo", arguments: [:])
+
+            // `CheAppleNotesMCPServer` isn't `Sendable` — deliberately: this
+            // test exists to prove concurrent calls into it don't crash, the
+            // same shape of access the real MCP SDK performs (a `Task` per
+            // incoming request, not an isolating actor).
+            nonisolated(unsafe) let server = server
+            let jsonResults = await withTaskGroup(of: String?.self) { group in
+                for _ in 0..<8 {
+                    group.addTask {
+                        try? await server.executeToolCall(name: "redo", arguments: [:])
+                    }
+                }
+                var collected: [String?] = []
+                for await r in group { collected.append(r) }
+                return collected
+            }
+
+            // No crash: every call returned a well-formed response.
+            let results = try jsonResults.compactMap { $0 }.map { try object($0) }
+            #expect(results.count == 8)
+            // At most one call could have actually redone the single entry;
+            // the rest must report "stack empty", not crash or corrupt state.
+            let succeeded = results.filter { $0["redone"] as? Bool == true }
+            #expect(succeeded.count <= 1)
+        }
+    }
+
+    // [#24](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/24) #1:
+    // undo-of-delete recreates under a new id; redo must delete *that* note,
+    // not the stale deleted id still sitting in the popped entry.
+    @Test func redoAfterUndoOfDeleteDeletesTheRecreatedNoteNotTheStaleID() async throws {
+        try await withHarness(nextPK: 200) { server, fake in
+            let staleID = fake.seedNote(pk: 205, title: "Archive B Note", folder: "Archive")
+            _ = try await server.executeToolCall(name: "delete_note", arguments: ["id": .string(staleID)])
+            _ = try await server.executeToolCall(name: "undo", arguments: [:])
+
+            let recreatedID = fake.noteID(pk: 200)
+            #expect(fake.note(recreatedID)?.deleted == false)
+
+            let redone = try object(try await server.executeToolCall(name: "redo", arguments: [:]))
+            #expect(redone["redone"] as? Bool == true)
+            #expect(fake.note(recreatedID)?.deleted == true)
+            // The stale id was already deleted before undo ever ran — redo
+            // must not have needed (or been able) to touch it again.
+            #expect(fake.note(staleID)?.deleted == true)
         }
     }
 

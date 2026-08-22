@@ -26,6 +26,10 @@ _Avoid_: tree (reserved for the whole hierarchy), children (direct only)
 **Account**:
 A top-level Notes container (e.g. iCloud, On My Mac). Every folder and note belongs to exactly one account; hierarchy never crosses accounts.
 
+**Commit point**:
+The single route every mutation takes. Performing a write and recording its consequences (freshness for read-repair, undo state) is one act; each tool's bookkeeping policy is declared there, never implied by an absent line of code.
+_Avoid_: write path, bookkeeping
+
 **Scripting**:
 The write-side channel to Notes.app: everything the server asks the app to do (create, rename, move, delete, share preparation, and live reads for freshness). AppleScript is how the production side speaks; the concept is the asking, not the mechanism.
 _Avoid_: AppleScript layer, controller, automation

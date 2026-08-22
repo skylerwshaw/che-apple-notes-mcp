@@ -83,4 +83,72 @@ import Testing
         #expect(history[1].contains("deleted note y"))
         #expect(history[2].contains("moved note z to dst"))
     }
+
+    // MARK: - Peek / replace ([#24](https://github.com/skylerwshaw/che-apple-notes-mcp/issues/24))
+
+    @Test func peekForRedoDoesNotMutateEitherStack() {
+        let stack = UndoStack()
+        stack.record(.create(id: "a"))
+        _ = stack.popForUndo()
+
+        let peeked = stack.peekForRedo()
+
+        #expect(peeked != nil)
+        #expect(stack.undoDepth() == 0)
+        #expect(stack.redoDepth() == 1)
+    }
+
+    @Test func peekForRedoOnEmptyReturnsNil() {
+        let stack = UndoStack()
+        #expect(stack.peekForRedo() == nil)
+    }
+
+    @Test func replaceTopOfRedoOverwritesTheEntryPopForUndoPushed() {
+        // Mirrors undo-of-delete: popForUndo pushes the stale-id entry, the
+        // caller mints a new id, and rewrites it before redo ever sees it.
+        let stack = UndoStack()
+        stack.record(.delete(id: "stale", title: "t", bodyHTML: "b", folder: "f", account: "a"))
+        _ = stack.popForUndo()
+
+        stack.replaceTopOfRedo(.delete(id: "minted", title: "t", bodyHTML: "b", folder: "f", account: "a"))
+
+        guard case .delete(let id, _, _, _, _) = stack.peekForRedo() else {
+            Issue.record("expected .delete on top of redo stack")
+            return
+        }
+        #expect(id == "minted")
+        #expect(stack.redoDepth() == 1)
+    }
+
+    @Test func replaceTopOfRedoOnEmptyStackIsANoop() {
+        let stack = UndoStack()
+        stack.replaceTopOfRedo(.create(id: "x"))
+        #expect(stack.redoDepth() == 0)
+    }
+
+    // MARK: - Degraded capture
+
+    @Test func deleteWithNilTitleIsDegraded() {
+        let op = UndoStack.Operation.delete(id: "a", title: nil, bodyHTML: nil, folder: nil, account: nil)
+        #expect(op.isDegraded)
+        #expect(op.humanDescription.contains("(prior state unavailable)"))
+    }
+
+    @Test func deleteWithCapturedTitleIsNotDegraded() {
+        let op = UndoStack.Operation.delete(id: "a", title: "t", bodyHTML: "b", folder: "f", account: "acc")
+        #expect(!op.isDegraded)
+        #expect(!op.humanDescription.contains("(prior state unavailable)"))
+    }
+
+    @Test func moveWithNilFromFolderIsDegraded() {
+        let op = UndoStack.Operation.move(id: "a", fromFolder: nil, account: nil, toFolder: "dst")
+        #expect(op.isDegraded)
+        #expect(op.humanDescription.contains("(prior state unavailable)"))
+    }
+
+    @Test func updateWithNilOldTitleIsDegraded() {
+        let op = UndoStack.Operation.update(id: "a", oldTitle: nil, oldBodyHTML: nil, newTitle: "n", newBodyHTML: nil)
+        #expect(op.isDegraded)
+        #expect(op.humanDescription.contains("(prior state unavailable)"))
+    }
 }
