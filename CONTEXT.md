@@ -12,6 +12,10 @@ _Avoid_: AppleScript ID, Core Data ID, pk
 The raw internal identifier (ZIDENTIFIER) of a note or folder. Diagnostic and lookup use only; not a write target. Emitted as `uuid`.
 _Avoid_: identifier, raw ID
 
+**Identity**:
+The typed result of parsing an incoming id string: which form it is (Canonical ID or UUID), and, when a Canonical ID's URI segment says so, which entity it names. Every tool declares which forms it accepts; the mismatch is rejected at the parse boundary, not wherever the string next gets used.
+_Avoid_: id form, identity type
+
 **Path**:
 The slash-joined folder titles from root to a folder (e.g. `Coparenting/Jaime/2024`). Presentation and convenience only; never identity, because renames and moves change it.
 _Avoid_: full name, location
